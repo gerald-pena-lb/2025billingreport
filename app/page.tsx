@@ -91,6 +91,13 @@ export default function Page() {
   const [uploadMsg, setUploadMsg] = useState<string | null>(null);
   const [dbError, setDbError] = useState<string | null>(null);
   const [kindFilter, setKindFilter] = useState<'all' | ItemKind>('all');
+  const [itemFilter, setItemFilter] = useState('');
+  const [descFilter, setDescFilter] = useState('');
+  const [hoverDesc, setHoverDesc] = useState<{
+    text: string;
+    x: number;
+    y: number;
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const configured = isSupabaseConfigured();
@@ -118,13 +125,19 @@ export default function Page() {
   }, [configured]);
 
   const sorted = useMemo(() => sortRows(rows), [rows]);
-  const visible = useMemo(
-    () =>
-      kindFilter === 'all'
-        ? sorted
-        : sorted.filter((r) => r.kind === kindFilter),
-    [sorted, kindFilter],
-  );
+  const visible = useMemo(() => {
+    const it = itemFilter.trim().toLowerCase();
+    const de = descFilter.trim().toLowerCase();
+    return sorted.filter((r) => {
+      if (kindFilter !== 'all' && r.kind !== kindFilter) return false;
+      if (it && !r.item.toLowerCase().includes(it)) return false;
+      if (de && !r.description.toLowerCase().includes(de)) return false;
+      return true;
+    });
+  }, [sorted, kindFilter, itemFilter, descFilter]);
+
+  const filterActive =
+    kindFilter !== 'all' || itemFilter.trim() !== '' || descFilter.trim() !== '';
 
   const kindCounts = useMemo(() => {
     const m = new Map<ItemKind, number>();
@@ -463,34 +476,21 @@ export default function Page() {
         </header>
 
         <div className="flex flex-wrap items-center gap-3 mb-3 text-sm">
-          <label className="inline-flex items-center gap-2">
-            <span className="text-gray-600">Filter by category:</span>
-            <select
-              value={kindFilter}
-              onChange={(e) =>
-                setKindFilter(e.target.value as 'all' | ItemKind)
-              }
-              className="border border-gray-300 rounded px-2 py-1 text-sm"
-            >
-              <option value="all">All ({rows.length})</option>
-              {ALL_KINDS.filter((k) => kindCounts.get(k)).map((k) => (
-                <option key={k} value={k}>
-                  {KIND_LABEL[k]} ({kindCounts.get(k)})
-                </option>
-              ))}
-            </select>
-          </label>
-          {kindFilter !== 'all' && (
-            <button
-              onClick={() => setKindFilter('all')}
-              className="text-xs text-blue-600 underline"
-            >
-              clear filter
-            </button>
-          )}
-          <span className="text-gray-500 ml-auto text-xs">
+          <span className="text-gray-500 text-xs">
             Showing {visible.length} of {rows.length}
           </span>
+          {filterActive && (
+            <button
+              onClick={() => {
+                setKindFilter('all');
+                setItemFilter('');
+                setDescFilter('');
+              }}
+              className="text-xs text-blue-600 underline"
+            >
+              clear all filters
+            </button>
+          )}
         </div>
 
         {uploadMsg && (
@@ -518,30 +518,63 @@ export default function Page() {
         <div className="bg-white border border-gray-300 rounded-md shadow-sm overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm border-collapse">
-              <thead className="bg-gray-100 text-left text-xs uppercase tracking-wide text-gray-600">
+              <thead className="bg-gray-100 text-left text-xs uppercase tracking-wide text-gray-600 sticky top-0 z-10">
                 <tr>
-                  <th className="border-b border-gray-300 px-2 py-2 w-32">
-                    Date of payment
+                  <th className="border-b border-gray-300 px-2 py-2 w-32 align-top">
+                    <div>Date of payment</div>
+                    <div className="h-6 mt-1" />
                   </th>
-                  <th className="border-b border-gray-300 px-2 py-2 w-32">
-                    Amount
+                  <th className="border-b border-gray-300 px-2 py-2 w-32 align-top">
+                    <div>Amount</div>
+                    <div className="h-6 mt-1" />
                   </th>
-                  <th className="border-b border-gray-300 px-2 py-2 w-28">
-                    Value
+                  <th className="border-b border-gray-300 px-2 py-2 w-28 align-top">
+                    <div>Value</div>
+                    <div className="h-6 mt-1" />
                   </th>
-                  <th className="border-b border-gray-300 px-2 py-2 w-32">
-                    Kind
+                  <th className="border-b border-gray-300 px-2 py-2 w-36 align-top">
+                    <div>Kind</div>
+                    <select
+                      value={kindFilter}
+                      onChange={(e) =>
+                        setKindFilter(e.target.value as 'all' | ItemKind)
+                      }
+                      title="Filter by kind"
+                      className="mt-1 w-full text-[11px] font-normal normal-case border border-gray-300 bg-white rounded px-1 py-0.5"
+                    >
+                      <option value="all">All ({rows.length})</option>
+                      {ALL_KINDS.filter((k) => kindCounts.get(k)).map((k) => (
+                        <option key={k} value={k}>
+                          {KIND_LABEL[k]} ({kindCounts.get(k)})
+                        </option>
+                      ))}
+                    </select>
                   </th>
-                  <th className="border-b border-gray-300 px-2 py-2 w-48">
-                    Item
+                  <th className="border-b border-gray-300 px-2 py-2 w-48 align-top">
+                    <div>Item</div>
+                    <input
+                      type="text"
+                      value={itemFilter}
+                      onChange={(e) => setItemFilter(e.target.value)}
+                      placeholder="filter…"
+                      className="mt-1 w-full text-[11px] font-normal normal-case border border-gray-300 bg-white rounded px-1 py-0.5"
+                    />
                   </th>
-                  <th className="border-b border-gray-300 px-2 py-2">
-                    Description
+                  <th className="border-b border-gray-300 px-2 py-2 align-top">
+                    <div>Description</div>
+                    <input
+                      type="text"
+                      value={descFilter}
+                      onChange={(e) => setDescFilter(e.target.value)}
+                      placeholder="filter…"
+                      className="mt-1 w-full text-[11px] font-normal normal-case border border-gray-300 bg-white rounded px-1 py-0.5"
+                    />
                   </th>
-                  <th className="border-b border-gray-300 px-2 py-2 w-72">
-                    URL / location
+                  <th className="border-b border-gray-300 px-2 py-2 w-72 align-top">
+                    <div>URL / location</div>
+                    <div className="h-6 mt-1" />
                   </th>
-                  <th className="border-b border-gray-300 px-2 py-2 w-10"></th>
+                  <th className="border-b border-gray-300 px-2 py-2 w-10 align-top"></th>
                 </tr>
               </thead>
               <tbody>
@@ -648,13 +681,29 @@ export default function Page() {
                         placeholder="Merchant / item"
                       />
                     </td>
-                    <td className="border-b border-gray-200 p-0">
+                    <td
+                      className="border-b border-gray-200 p-0"
+                      onMouseEnter={(e) => {
+                        if (!r.description) return;
+                        const rect = (
+                          e.currentTarget as HTMLTableCellElement
+                        ).getBoundingClientRect();
+                        setHoverDesc({
+                          text: r.description,
+                          x: rect.left,
+                          y: rect.bottom,
+                        });
+                      }}
+                      onMouseLeave={() => setHoverDesc(null)}
+                    >
                       <input
                         type="text"
                         value={r.description}
                         onChange={(e) =>
                           updateRow(r.id, { description: e.target.value })
                         }
+                        onFocus={() => setHoverDesc(null)}
+                        title={r.description}
                         className="cell-input"
                         placeholder="Description"
                       />
@@ -706,8 +755,25 @@ export default function Page() {
         <p className="text-xs text-gray-500 mt-3">
           Rows are stored in your Supabase project. Edits save automatically.
           Change a row's kind from the dropdown if the classifier got it wrong.
+          Hover the description cell to see the full text.
         </p>
       </div>
+
+      {hoverDesc && (
+        <div
+          role="tooltip"
+          style={{
+            position: 'fixed',
+            left: Math.min(hoverDesc.x, window.innerWidth - 460),
+            top: hoverDesc.y + 6,
+            maxWidth: 440,
+            zIndex: 100,
+          }}
+          className="pointer-events-none bg-gray-900 text-white text-xs rounded-md px-3 py-2 shadow-lg whitespace-pre-wrap break-words"
+        >
+          {hoverDesc.text}
+        </div>
+      )}
     </main>
   );
 }
