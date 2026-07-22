@@ -4,41 +4,68 @@ import Anthropic from '@anthropic-ai/sdk';
 export const runtime = 'nodejs';
 export const maxDuration = 120;
 
+export type ItemKind =
+  | 'payment'
+  | 'incoming'
+  | 'conversion'
+  | 'withdrawal'
+  | 'cashback'
+  | 'refund'
+  | 'balance'
+  | 'other';
+
 type ExtractedItem = {
   date: string | null;
   amount: number | null;
   currency: string | null;
   item: string | null;
   description: string | null;
+  kind: ItemKind;
 };
 
-const SYSTEM_PROMPT = `You are a receipt / statement analyzer. You will receive a receipt, invoice, or a financial statement (bank statement, credit-card statement, PayPal statement, etc.).
+const VALID_KINDS: ReadonlySet<ItemKind> = new Set([
+  'payment',
+  'incoming',
+  'conversion',
+  'withdrawal',
+  'cashback',
+  'refund',
+  'balance',
+  'other',
+]);
 
-Your job:
-1. Identify every actual PAYMENT / EXPENSE / OUTGOING CHARGE in the document. Each becomes one line item.
-2. EXCLUDE the following — never emit rows for these:
-   - Incoming money: deposits, transfers in, refunds received, salary, interest received, cashback, credits
-   - Cashflow-only movements: ATM withdrawals, cash withdrawals, transfers between the user's own accounts, currency conversions, "money in" / "money out" of a PayPal balance that is just moving funds around
-   - Opening / closing / running balances
-   - Section headings and subtotals
-3. For a simple single-purchase receipt (one shop, one purchase), emit exactly one item.
-4. For a statement with many charges, emit one item per charge.
+const SYSTEM_PROMPT = `You are a receipt / statement analyzer. You will receive a receipt, invoice, or a financial statement (bank statement, credit-card statement, PayPal statement, Wise statement, etc.).
+
+Your job: emit ONE JSON item per real line in the document. Do NOT drop rows silently — the user wants to see everything and decide themselves. Classify each line with a "kind" field so the user can filter or bulk-delete.
+
+Emit an item for every transaction line. DO NOT emit items for opening/closing balances, running-balance rows, section headings, subtotals, or the "balance at end of period" summary — those are display artifacts, not transactions.
+
+"kind" must be exactly one of:
+- "payment"    — an actual expense / charge / purchase from a third party (e.g. GoDaddy, Uber, Amazon). This is what the user actually cares about.
+- "incoming"   — money received: salary, client payment, transfer in, deposit
+- "refund"     — money back from a previous purchase
+- "conversion" — currency conversion between the user's own balances (e.g. "Converted 100 USD to 92 EUR")
+- "withdrawal" — ATM withdrawal or cash-out
+- "cashback"   — cashback / rewards credit
+- "balance"    — a balance / total / subtotal row that slipped through (rare — prefer to omit these)
+- "other"      — anything you cannot confidently classify
 
 Return ONLY a JSON object of this shape — no prose, no markdown fences:
 
 {
   "items": [
     {
-      "date": "YYYY-MM-DD" | null,          // date the payment was made
-      "amount": number | null,               // positive number, no currency symbol, no thousands separator
-      "currency": "AED" | "USD" | "EUR" | ... | null,  // ISO 4217, if determinable
-      "item": string,                        // short label — merchant or main purchase, max 40 chars
-      "description": string                  // one-line human summary, max 120 chars
+      "date": "YYYY-MM-DD" | null,
+      "amount": number | null,          // positive number, no currency symbol, no thousands separator
+      "currency": "AED" | "USD" | "EUR" | ... | null,
+      "item": string,                   // short label — merchant or counterparty, max 40 chars
+      "description": string,            // one-line human summary, max 120 chars
+      "kind": "payment" | "incoming" | "refund" | "conversion" | "withdrawal" | "cashback" | "balance" | "other"
     }
   ]
 }
 
-If the document is unreadable or contains no actual payments, return { "items": [] }.`;
+For a simple single-purchase receipt (one shop, one purchase), emit exactly one item of kind "payment". If the document is unreadable or contains no transaction lines, return { "items": [] }.`;
 
 function parseJsonLoose(text: string): unknown {
   const trimmed = text.trim();
@@ -56,12 +83,17 @@ function normalizeItem(raw: Partial<ExtractedItem>): ExtractedItem {
     typeof raw.amount === 'number' && Number.isFinite(raw.amount)
       ? Math.abs(raw.amount)
       : null;
+  const kind =
+    raw.kind && VALID_KINDS.has(raw.kind as ItemKind)
+      ? (raw.kind as ItemKind)
+      : 'other';
   return {
     date: raw.date ?? null,
     amount: amt,
     currency: raw.currency ?? null,
     item: raw.item ?? null,
     description: raw.description ?? null,
+    kind,
   };
 }
 
@@ -117,7 +149,7 @@ export async function POST(req: NextRequest) {
                 } as unknown as Anthropic.ImageBlockParam,
                 {
                   type: 'text',
-                  text: 'Extract every actual payment/expense line item as JSON per the schema. Exclude withdrawals and incoming money.',
+                  text: 'Extract every transaction line as JSON per the schema. Include incoming / conversions / cashback too, and classify each with "kind" — the user will filter and delete.',
                 },
               ],
             },

@@ -1,12 +1,50 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { AnalyzeResponse, ReceiptRow } from '@/lib/types';
+import type { AnalyzeResponse, ItemKind, ReceiptRow } from '@/lib/types';
 import {
   getSupabase,
   isSupabaseConfigured,
   type ReceiptDb,
 } from '@/lib/supabase';
+
+const KIND_LABEL: Record<ItemKind, string> = {
+  payment: 'Payment',
+  incoming: 'Incoming',
+  refund: 'Refund',
+  conversion: 'Conversion',
+  withdrawal: 'Withdrawal',
+  cashback: 'Cashback',
+  balance: 'Balance',
+  other: 'Other',
+};
+
+const KIND_STYLE: Record<ItemKind, string> = {
+  payment: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+  incoming: 'bg-sky-100 text-sky-800 border-sky-200',
+  refund: 'bg-sky-100 text-sky-800 border-sky-200',
+  conversion: 'bg-amber-100 text-amber-800 border-amber-200',
+  withdrawal: 'bg-amber-100 text-amber-800 border-amber-200',
+  cashback: 'bg-sky-100 text-sky-800 border-sky-200',
+  balance: 'bg-gray-100 text-gray-700 border-gray-200',
+  other: 'bg-gray-100 text-gray-700 border-gray-200',
+};
+
+const ALL_KINDS: ItemKind[] = [
+  'payment',
+  'incoming',
+  'refund',
+  'conversion',
+  'withdrawal',
+  'cashback',
+  'balance',
+  'other',
+];
+
+function normKind(k: string | null | undefined): ItemKind {
+  if (k && (ALL_KINDS as string[]).includes(k)) return k as ItemKind;
+  return 'other';
+}
 
 function sortRows(rows: ReceiptRow[]): ReceiptRow[] {
   return [...rows].sort((a, b) => {
@@ -20,14 +58,18 @@ function sortRows(rows: ReceiptRow[]): ReceiptRow[] {
 }
 
 function toRow(r: ReceiptDb): ReceiptRow {
+  const amt = r.amount == null ? null : Number(r.amount);
+  const val = r.value == null ? amt : Number(r.value);
   return {
     id: r.id,
     date: r.date,
-    amount: r.amount == null ? null : Number(r.amount),
+    amount: amt,
+    value: val,
     currency: r.currency,
     item: r.item ?? '',
     description: r.description ?? '',
     url: r.url ?? '',
+    kind: normKind(r.kind),
     fileName: r.file_name,
     createdAt: new Date(r.created_at).getTime(),
   };
@@ -48,6 +90,7 @@ export default function Page() {
   const [uploading, setUploading] = useState(false);
   const [uploadMsg, setUploadMsg] = useState<string | null>(null);
   const [dbError, setDbError] = useState<string | null>(null);
+  const [kindFilter, setKindFilter] = useState<'all' | ItemKind>('all');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const configured = isSupabaseConfigured();
@@ -75,16 +118,30 @@ export default function Page() {
   }, [configured]);
 
   const sorted = useMemo(() => sortRows(rows), [rows]);
+  const visible = useMemo(
+    () =>
+      kindFilter === 'all'
+        ? sorted
+        : sorted.filter((r) => r.kind === kindFilter),
+    [sorted, kindFilter],
+  );
+
+  const kindCounts = useMemo(() => {
+    const m = new Map<ItemKind, number>();
+    for (const r of rows) m.set(r.kind, (m.get(r.kind) ?? 0) + 1);
+    return m;
+  }, [rows]);
 
   const total = useMemo(() => {
     const byCcy = new Map<string, number>();
-    for (const r of rows) {
-      if (r.amount == null) continue;
+    for (const r of visible) {
+      const v = r.value ?? r.amount;
+      if (v == null) continue;
       const ccy = r.currency || '';
-      byCcy.set(ccy, (byCcy.get(ccy) || 0) + r.amount);
+      byCcy.set(ccy, (byCcy.get(ccy) || 0) + v);
     }
     return Array.from(byCcy.entries()).map(([ccy, sum]) => ({ ccy, sum }));
-  }, [rows]);
+  }, [visible]);
 
   async function persistUpdate(id: string, patch: Partial<ReceiptRow>) {
     const supabase = getSupabase();
@@ -92,10 +149,12 @@ export default function Page() {
     const dbPatch: Partial<ReceiptDb> = {};
     if ('date' in patch) dbPatch.date = patch.date ?? null;
     if ('amount' in patch) dbPatch.amount = patch.amount ?? null;
+    if ('value' in patch) dbPatch.value = patch.value ?? null;
     if ('currency' in patch) dbPatch.currency = patch.currency ?? null;
     if ('item' in patch) dbPatch.item = patch.item ?? '';
     if ('description' in patch) dbPatch.description = patch.description ?? '';
     if ('url' in patch) dbPatch.url = patch.url ?? '';
+    if ('kind' in patch) dbPatch.kind = patch.kind ?? 'other';
     const { error } = await supabase
       .from('receipts')
       .update(dbPatch)
@@ -116,6 +175,29 @@ export default function Page() {
     if (error) setDbError(error.message);
   }
 
+  async function deleteNonPayments() {
+    const nonPayIds = rows.filter((r) => r.kind !== 'payment').map((r) => r.id);
+    if (nonPayIds.length === 0) return;
+    if (
+      !confirm(
+        `Delete ${nonPayIds.length} non-payment row(s) (incoming, conversions, withdrawals, cashback, other)?`,
+      )
+    ) {
+      return;
+    }
+    const supabase = getSupabase();
+    if (!supabase) return;
+    const { error } = await supabase
+      .from('receipts')
+      .delete()
+      .in('id', nonPayIds);
+    if (error) {
+      setDbError(error.message);
+      return;
+    }
+    setRows((prev) => prev.filter((r) => r.kind === 'payment'));
+  }
+
   async function addBlankRow() {
     const supabase = getSupabase();
     if (!supabase) return;
@@ -124,11 +206,13 @@ export default function Page() {
       .insert({
         date: null,
         amount: null,
+        value: null,
         currency: null,
         item: '',
         description: '',
         url: '',
         file_name: null,
+        kind: 'payment',
       })
       .select('*')
       .single();
@@ -162,18 +246,26 @@ export default function Page() {
       const perFile: string[] = [];
       for (const r of json.results) {
         if (r.ok && r.items) {
+          const kindCount = new Map<ItemKind, number>();
           for (const it of r.items) {
+            const k = normKind(it.kind);
+            kindCount.set(k, (kindCount.get(k) ?? 0) + 1);
             toInsert.push({
               date: it.date,
               amount: it.amount,
+              value: it.amount,
               currency: it.currency,
               item: it.item ?? '',
               description: it.description ?? '',
               url: '',
               file_name: r.fileName,
+              kind: k,
             });
           }
-          perFile.push(`${r.fileName}: ${r.items.length}`);
+          const breakdown = Array.from(kindCount.entries())
+            .map(([k, n]) => `${n} ${k}`)
+            .join(', ');
+          perFile.push(`${r.fileName}: ${r.items.length} (${breakdown})`);
         } else {
           errors.push(`${r.fileName}: ${r.error ?? 'failed'}`);
         }
@@ -194,7 +286,7 @@ export default function Page() {
           );
         }
       }
-      const summary = perFile.length ? ` (${perFile.join(', ')})` : '';
+      const summary = perFile.length ? ` — ${perFile.join(' · ')}` : '';
       setUploadMsg(
         errors.length === 0
           ? `Added ${toInsert.length} row(s)${summary}.`
@@ -205,24 +297,35 @@ export default function Page() {
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
-      setTimeout(() => setUploadMsg(null), 6000);
+      setTimeout(() => setUploadMsg(null), 12000);
     }
   }
 
   function exportCsv() {
-    const header = ['Date', 'Amount', 'Currency', 'Item', 'Description', 'URL'];
+    const header = [
+      'Date',
+      'Amount',
+      'Value',
+      'Currency',
+      'Item',
+      'Description',
+      'URL',
+      'Kind',
+    ];
     const escape = (v: string) =>
       /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
     const lines = [header.join(',')];
-    for (const r of sorted) {
+    for (const r of visible) {
       lines.push(
         [
           r.date ?? '',
           r.amount == null ? '' : String(r.amount),
+          r.value == null ? '' : String(r.value),
           r.currency ?? '',
           r.item,
           r.description,
           r.url,
+          r.kind,
         ]
           .map((v) => escape(v))
           .join(','),
@@ -261,11 +364,15 @@ export default function Page() {
     if (/invalid path/i.test(msg)) {
       return 'Check NEXT_PUBLIC_SUPABASE_URL in Vercel — it should look like https://xxxx.supabase.co with no trailing slash and no /rest/v1 suffix. After fixing, redeploy.';
     }
-    if (/relation .* does not exist/i.test(msg) || /receipts.*not found/i.test(msg)) {
-      return 'The `receipts` table is missing. Open Supabase → SQL Editor and run supabase/schema.sql.';
+    if (
+      /relation .* does not exist/i.test(msg) ||
+      /receipts.*not found/i.test(msg) ||
+      /column .* does not exist/i.test(msg)
+    ) {
+      return 'The `receipts` table is missing or out of date. Open Supabase → SQL Editor and re-run supabase/schema.sql (it is idempotent and safe to re-run).';
     }
     if (/jwt|apikey|invalid api key/i.test(msg)) {
-      return 'Check NEXT_PUBLIC_SUPABASE_ANON_KEY in Vercel — it should be the anon (public) key from Supabase → Project Settings → API. Redeploy after changing.';
+      return 'Check NEXT_PUBLIC_SUPABASE_ANON_KEY in Vercel. Redeploy after changing.';
     }
     if (/row-level security|rls/i.test(msg)) {
       return 'RLS is blocking the request. Re-run supabase/schema.sql to install the anon policies.';
@@ -296,6 +403,8 @@ export default function Page() {
     );
   }
 
+  const nonPaymentCount = rows.length - (kindCounts.get('payment') ?? 0);
+
   return (
     <main className="min-h-screen p-4 md:p-8">
       <div className="mx-auto max-w-7xl">
@@ -303,9 +412,9 @@ export default function Page() {
           <div>
             <h1 className="text-2xl font-semibold">Receipt Analyzer</h1>
             <p className="text-sm text-gray-600">
-              Upload receipts — Claude extracts amount, item, description, and
-              date. Rows auto-sort by date and persist to Supabase. Fill the
-              URL column with wherever the receipt lives.
+              Upload receipts or statements — Claude extracts every line and
+              tags each as payment / incoming / conversion / etc. Scan the
+              badges and delete anything that isn't a real expense.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -337,16 +446,55 @@ export default function Page() {
               Export CSV
             </button>
             <button
+              onClick={deleteNonPayments}
+              disabled={nonPaymentCount === 0}
+              className="bg-white border border-amber-300 text-amber-800 hover:bg-amber-50 disabled:opacity-40 px-3 py-2 rounded-md text-sm"
+              title="Delete every row not tagged as 'payment'"
+            >
+              Delete non-payments{nonPaymentCount ? ` (${nonPaymentCount})` : ''}
+            </button>
+            <button
               onClick={clearAll}
               className="bg-white border border-red-300 text-red-700 hover:bg-red-50 px-3 py-2 rounded-md text-sm"
             >
-              Clear
+              Clear all
             </button>
           </div>
         </header>
 
+        <div className="flex flex-wrap items-center gap-3 mb-3 text-sm">
+          <label className="inline-flex items-center gap-2">
+            <span className="text-gray-600">Filter by category:</span>
+            <select
+              value={kindFilter}
+              onChange={(e) =>
+                setKindFilter(e.target.value as 'all' | ItemKind)
+              }
+              className="border border-gray-300 rounded px-2 py-1 text-sm"
+            >
+              <option value="all">All ({rows.length})</option>
+              {ALL_KINDS.filter((k) => kindCounts.get(k)).map((k) => (
+                <option key={k} value={k}>
+                  {KIND_LABEL[k]} ({kindCounts.get(k)})
+                </option>
+              ))}
+            </select>
+          </label>
+          {kindFilter !== 'all' && (
+            <button
+              onClick={() => setKindFilter('all')}
+              className="text-xs text-blue-600 underline"
+            >
+              clear filter
+            </button>
+          )}
+          <span className="text-gray-500 ml-auto text-xs">
+            Showing {visible.length} of {rows.length}
+          </span>
+        </div>
+
         {uploadMsg && (
-          <div className="mb-3 text-sm bg-blue-50 border border-blue-200 text-blue-900 rounded px-3 py-2">
+          <div className="mb-3 text-sm bg-blue-50 border border-blue-200 text-blue-900 rounded px-3 py-2 whitespace-pre-wrap">
             {uploadMsg}
           </div>
         )}
@@ -378,6 +526,12 @@ export default function Page() {
                   <th className="border-b border-gray-300 px-2 py-2 w-32">
                     Amount
                   </th>
+                  <th className="border-b border-gray-300 px-2 py-2 w-28">
+                    Value
+                  </th>
+                  <th className="border-b border-gray-300 px-2 py-2 w-32">
+                    Kind
+                  </th>
                   <th className="border-b border-gray-300 px-2 py-2 w-48">
                     Item
                   </th>
@@ -393,24 +547,26 @@ export default function Page() {
               <tbody>
                 {loading && (
                   <tr>
-                    <td colSpan={6} className="text-center text-gray-500 py-16">
+                    <td colSpan={8} className="text-center text-gray-500 py-16">
                       Loading…
                     </td>
                   </tr>
                 )}
-                {!loading && sorted.length === 0 && (
+                {!loading && visible.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="text-center text-gray-500 py-16">
-                      No receipts yet. Click{' '}
-                      <span className="font-medium">Upload receipts</span> to
-                      get started.
+                    <td colSpan={8} className="text-center text-gray-500 py-16">
+                      {rows.length === 0
+                        ? 'No receipts yet. Click Upload receipts to get started.'
+                        : 'No rows match the current filter.'}
                     </td>
                   </tr>
                 )}
-                {sorted.map((r) => (
+                {visible.map((r) => (
                   <tr
                     key={r.id}
-                    className="odd:bg-white even:bg-gray-50 hover:bg-yellow-50/40"
+                    className={`odd:bg-white even:bg-gray-50 hover:bg-yellow-50/40 ${
+                      r.kind !== 'payment' ? 'text-gray-500' : ''
+                    }`}
                   >
                     <td className="border-b border-gray-200 p-0">
                       <input
@@ -450,6 +606,36 @@ export default function Page() {
                           className="cell-input flex-1 text-right font-mono"
                         />
                       </div>
+                    </td>
+                    <td className="border-b border-gray-200 p-0">
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={r.value ?? ''}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          updateRow(r.id, {
+                            value: v === '' ? null : Number(v),
+                          });
+                        }}
+                        placeholder="0.00"
+                        className="cell-input text-right font-mono"
+                      />
+                    </td>
+                    <td className="border-b border-gray-200 p-1">
+                      <select
+                        value={r.kind}
+                        onChange={(e) =>
+                          updateRow(r.id, { kind: e.target.value as ItemKind })
+                        }
+                        className={`w-full text-xs px-2 py-1 rounded border ${KIND_STYLE[r.kind]} outline-none`}
+                      >
+                        {ALL_KINDS.map((k) => (
+                          <option key={k} value={k}>
+                            {KIND_LABEL[k]}
+                          </option>
+                        ))}
+                      </select>
                     </td>
                     <td className="border-b border-gray-200 p-0">
                       <input
@@ -500,9 +686,10 @@ export default function Page() {
                 <tfoot className="bg-gray-50">
                   <tr>
                     <td className="px-2 py-2 text-right text-xs uppercase tracking-wide text-gray-500 font-medium">
-                      Total
+                      Total value{' '}
+                      {kindFilter === 'all' ? '(shown)' : `(${kindFilter})`}
                     </td>
-                    <td className="px-2 py-2 font-mono text-right" colSpan={5}>
+                    <td className="px-2 py-2 font-mono text-right" colSpan={7}>
                       {total.map((t) => (
                         <span key={t.ccy} className="mr-4">
                           {formatAmount(t.sum, t.ccy || null)}
@@ -518,6 +705,7 @@ export default function Page() {
 
         <p className="text-xs text-gray-500 mt-3">
           Rows are stored in your Supabase project. Edits save automatically.
+          Change a row's kind from the dropdown if the classifier got it wrong.
         </p>
       </div>
     </main>

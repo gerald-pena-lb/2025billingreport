@@ -1,11 +1,23 @@
+export type ItemKind =
+  | 'payment'
+  | 'incoming'
+  | 'conversion'
+  | 'withdrawal'
+  | 'cashback'
+  | 'refund'
+  | 'balance'
+  | 'other';
+
 export type ReceiptRow = {
   id: string;
   date: string | null;        // YYYY-MM-DD
   amount: number | null;
+  value: number | null;        // how much was actually paid (editable)
   currency: string | null;
   item: string;
   description: string;
   url: string;                 // user-fillable
+  kind: ItemKind;
   fileName?: string | null;
   createdAt: number;           // epoch ms, derived from created_at
 };
@@ -16,6 +28,7 @@ export type ExtractedItem = {
   currency: string | null;
   item: string | null;
   description: string | null;
+  kind: ItemKind;
 };
 
 export type AnalyzeResult = {

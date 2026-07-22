@@ -12,8 +12,16 @@ create table if not exists public.receipts (
   description  text not null default '',
   url          text not null default '',
   file_name    text,
+  kind         text not null default 'payment',
+  value        numeric(14, 2),
   created_at   timestamptz not null default now()
 );
+
+-- If upgrading from an older schema, add the columns in place.
+alter table public.receipts
+  add column if not exists kind  text not null default 'payment';
+alter table public.receipts
+  add column if not exists value numeric(14, 2);
 
 create index if not exists receipts_date_idx on public.receipts (date nulls last, created_at);
 
