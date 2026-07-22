@@ -428,7 +428,6 @@ export default function Page() {
         url: '',
         file_name: null,
         kind: 'payment',
-        owner: null,
       })
       .select('*')
       .single();
@@ -476,7 +475,6 @@ export default function Page() {
               url: '',
               file_name: r.fileName,
               kind: k,
-              owner: null,
             });
           }
           const breakdown = Array.from(kindCount.entries())
