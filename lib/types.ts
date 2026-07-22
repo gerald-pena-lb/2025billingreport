@@ -18,6 +18,7 @@ export type ReceiptRow = {
   description: string;
   url: string;                 // user-fillable
   kind: ItemKind;
+  owner: string | null;        // Alinka / Anette / Gerald / Glenda / null
   fileName?: string | null;
   createdAt: number;           // epoch ms, derived from created_at
 };

@@ -42,5 +42,6 @@ export type ReceiptDb = {
   file_name: string | null;
   kind: string;
   value: number | null;
+  owner: string | null;
   created_at: string;
 };

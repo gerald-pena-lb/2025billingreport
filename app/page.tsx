@@ -31,6 +31,9 @@ const KIND_STYLE: Record<ItemKind, string> = {
   other: 'bg-gray-100 text-gray-700 border-gray-200',
 };
 
+const OWNERS = ['Alinka', 'Anette', 'Gerald', 'Glenda'] as const;
+const UNASSIGNED = '__unassigned__';
+
 const ALL_KINDS: ItemKind[] = [
   'payment',
   'incoming',
@@ -71,6 +74,7 @@ function toRow(r: ReceiptDb): ReceiptRow {
     description: r.description ?? '',
     url: r.url ?? '',
     kind: normKind(r.kind),
+    owner: r.owner ?? null,
     fileName: r.file_name,
     createdAt: new Date(r.created_at).getTime(),
   };
@@ -212,6 +216,7 @@ export default function Page() {
   const [dbError, setDbError] = useState<string | null>(null);
   const [kindFilter, setKindFilter] = useState<Set<string>>(new Set());
   const [monthFilter, setMonthFilter] = useState<Set<string>>(new Set());
+  const [ownerFilter, setOwnerFilter] = useState<Set<string>>(new Set());
   const [itemFilter, setItemFilter] = useState('');
   const [descFilter, setDescFilter] = useState('');
   const [hoverDesc, setHoverDesc] = useState<{
@@ -255,15 +260,20 @@ export default function Page() {
         const mk = monthKey(r.date);
         if (!mk || !monthFilter.has(mk)) return false;
       }
+      if (ownerFilter.size > 0) {
+        const key = r.owner ?? UNASSIGNED;
+        if (!ownerFilter.has(key)) return false;
+      }
       if (it && !r.item.toLowerCase().includes(it)) return false;
       if (de && !r.description.toLowerCase().includes(de)) return false;
       return true;
     });
-  }, [sorted, kindFilter, monthFilter, itemFilter, descFilter]);
+  }, [sorted, kindFilter, monthFilter, ownerFilter, itemFilter, descFilter]);
 
   const filterActive =
     kindFilter.size > 0 ||
     monthFilter.size > 0 ||
+    ownerFilter.size > 0 ||
     itemFilter.trim() !== '' ||
     descFilter.trim() !== '';
 
@@ -300,6 +310,35 @@ export default function Page() {
     if (monthFilter.size === 1) return monthLabel(Array.from(monthFilter)[0]);
     return `${monthFilter.size} months`;
   }
+  function ownerFilterLabel() {
+    if (ownerFilter.size === 0) return `All owners`;
+    if (ownerFilter.size === 1) {
+      const v = Array.from(ownerFilter)[0];
+      return v === UNASSIGNED ? 'Unassigned' : v;
+    }
+    return `${ownerFilter.size} owners`;
+  }
+
+  const ownerOptions = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const r of rows) {
+      const k = r.owner ?? UNASSIGNED;
+      counts.set(k, (counts.get(k) ?? 0) + 1);
+    }
+    const opts: MultiSelectOption[] = OWNERS.map((o) => ({
+      value: o,
+      label: o,
+      count: counts.get(o) ?? 0,
+    }));
+    if ((counts.get(UNASSIGNED) ?? 0) > 0) {
+      opts.push({
+        value: UNASSIGNED,
+        label: 'Unassigned',
+        count: counts.get(UNASSIGNED) ?? 0,
+      });
+    }
+    return opts;
+  }, [rows]);
 
   const kindCounts = useMemo(() => {
     const m = new Map<ItemKind, number>();
@@ -330,6 +369,7 @@ export default function Page() {
     if ('description' in patch) dbPatch.description = patch.description ?? '';
     if ('url' in patch) dbPatch.url = patch.url ?? '';
     if ('kind' in patch) dbPatch.kind = patch.kind ?? 'other';
+    if ('owner' in patch) dbPatch.owner = patch.owner ?? null;
     const { error } = await supabase
       .from('receipts')
       .update(dbPatch)
@@ -388,6 +428,7 @@ export default function Page() {
         url: '',
         file_name: null,
         kind: 'payment',
+        owner: null,
       })
       .select('*')
       .single();
@@ -435,6 +476,7 @@ export default function Page() {
               url: '',
               file_name: r.fileName,
               kind: k,
+              owner: null,
             });
           }
           const breakdown = Array.from(kindCount.entries())
@@ -490,6 +532,7 @@ export default function Page() {
       'Description',
       'URL',
       'Kind',
+      'Owner',
     ];
     const escape = (v: string) =>
       /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
@@ -505,6 +548,7 @@ export default function Page() {
           r.description,
           r.url,
           r.kind,
+          r.owner ?? '',
         ]
           .map((v) => escape(v))
           .join(','),
@@ -645,7 +689,7 @@ export default function Page() {
 
         {/* Mobile-only filter bar (headers are inside the table on desktop) */}
         <div className="md:hidden grid grid-cols-1 gap-2 mb-3">
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-3 gap-2">
             <MultiSelectMenu
               buttonLabel={monthFilterLabel()}
               options={monthOptions}
@@ -657,6 +701,12 @@ export default function Page() {
               options={kindOptions}
               selected={kindFilter}
               onChange={setKindFilter}
+            />
+            <MultiSelectMenu
+              buttonLabel={ownerFilterLabel()}
+              options={ownerOptions}
+              selected={ownerFilter}
+              onChange={setOwnerFilter}
               align="right"
             />
           </div>
@@ -687,6 +737,7 @@ export default function Page() {
               onClick={() => {
                 setKindFilter(new Set());
                 setMonthFilter(new Set());
+                setOwnerFilter(new Set());
                 setItemFilter('');
                 setDescFilter('');
               }}
@@ -773,6 +824,17 @@ export default function Page() {
                       className="mt-1 w-full text-[11px] font-normal normal-case border border-gray-300 bg-white rounded px-1 py-0.5"
                     />
                   </th>
+                  <th className="border-b border-gray-300 px-2 py-2 w-36 align-top">
+                    <div>Owner</div>
+                    <MultiSelectMenu
+                      buttonLabel={ownerFilterLabel()}
+                      options={ownerOptions}
+                      selected={ownerFilter}
+                      onChange={setOwnerFilter}
+                      className="mt-1"
+                      align="right"
+                    />
+                  </th>
                   <th className="border-b border-gray-300 px-2 py-2 w-72 align-top">
                     <div>URL / location</div>
                     <div className="h-6 mt-1" />
@@ -783,14 +845,14 @@ export default function Page() {
               <tbody>
                 {loading && (
                   <tr>
-                    <td colSpan={8} className="text-center text-gray-500 py-16">
+                    <td colSpan={9} className="text-center text-gray-500 py-16">
                       Loading…
                     </td>
                   </tr>
                 )}
                 {!loading && visible.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="text-center text-gray-500 py-16">
+                    <td colSpan={9} className="text-center text-gray-500 py-16">
                       {rows.length === 0
                         ? 'No receipts yet. Click Upload receipts to get started.'
                         : 'No rows match the current filter.'}
@@ -911,6 +973,24 @@ export default function Page() {
                         placeholder="Description"
                       />
                     </td>
+                    <td className="border-b border-gray-200 p-1">
+                      <select
+                        value={r.owner ?? ''}
+                        onChange={(e) =>
+                          updateRow(r.id, {
+                            owner: e.target.value || null,
+                          })
+                        }
+                        className="w-full text-xs px-2 py-1 rounded border border-gray-300 bg-white outline-none"
+                      >
+                        <option value="">— Unassigned —</option>
+                        {OWNERS.map((o) => (
+                          <option key={o} value={o}>
+                            {o}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
                     <td className="border-b border-gray-200 p-0">
                       <input
                         type="url"
@@ -941,7 +1021,7 @@ export default function Page() {
                       Total value{' '}
                       (shown)
                     </td>
-                    <td className="px-2 py-2 font-mono text-right" colSpan={7}>
+                    <td className="px-2 py-2 font-mono text-right" colSpan={8}>
                       {total.map((t) => (
                         <span key={t.ccy} className="mr-4">
                           {formatAmount(t.sum, t.ccy || null)}
@@ -1096,6 +1176,26 @@ export default function Page() {
                   rows={2}
                   className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm resize-y"
                 />
+              </label>
+
+              <label className="block mb-2">
+                <span className="block text-[10px] uppercase tracking-wide text-gray-500 mb-0.5">
+                  Owner
+                </span>
+                <select
+                  value={r.owner ?? ''}
+                  onChange={(e) =>
+                    updateRow(r.id, { owner: e.target.value || null })
+                  }
+                  className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
+                >
+                  <option value="">— Unassigned —</option>
+                  {OWNERS.map((o) => (
+                    <option key={o} value={o}>
+                      {o}
+                    </option>
+                  ))}
+                </select>
               </label>
 
               <label className="block">

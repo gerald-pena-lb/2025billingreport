@@ -14,6 +14,7 @@ create table if not exists public.receipts (
   file_name    text,
   kind         text not null default 'payment',
   value        numeric(14, 2),
+  owner        text,
   created_at   timestamptz not null default now()
 );
 
@@ -22,6 +23,8 @@ alter table public.receipts
   add column if not exists kind  text not null default 'payment';
 alter table public.receipts
   add column if not exists value numeric(14, 2);
+alter table public.receipts
+  add column if not exists owner text;
 
 create index if not exists receipts_date_idx on public.receipts (date nulls last, created_at);
 
