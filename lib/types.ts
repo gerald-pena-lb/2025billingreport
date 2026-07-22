@@ -6,8 +6,8 @@ export type ReceiptRow = {
   item: string;
   description: string;
   url: string;                 // user-fillable
-  fileName?: string;
-  createdAt: number;
+  fileName?: string | null;
+  createdAt: number;           // epoch ms, derived from created_at
 };
 
 export type AnalyzeResult = {

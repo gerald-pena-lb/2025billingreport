@@ -2,13 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AnalyzeResponse, ReceiptRow } from '@/lib/types';
-
-const STORAGE_ROWS = 'receipts.rows.v1';
-const STORAGE_KEY = 'receipts.apikey.v1';
-
-function uid() {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
-}
+import {
+  getSupabase,
+  isSupabaseConfigured,
+  type ReceiptDb,
+} from '@/lib/supabase';
 
 function sortRows(rows: ReceiptRow[]): ReceiptRow[] {
   return [...rows].sort((a, b) => {
@@ -19,6 +17,20 @@ function sortRows(rows: ReceiptRow[]): ReceiptRow[] {
     if (!db) return -1;
     return da.localeCompare(db);
   });
+}
+
+function toRow(r: ReceiptDb): ReceiptRow {
+  return {
+    id: r.id,
+    date: r.date,
+    amount: r.amount == null ? null : Number(r.amount),
+    currency: r.currency,
+    item: r.item ?? '',
+    description: r.description ?? '',
+    url: r.url ?? '',
+    fileName: r.file_name,
+    createdAt: new Date(r.created_at).getTime(),
+  };
 }
 
 function formatAmount(n: number | null, currency: string | null): string {
@@ -32,26 +44,35 @@ function formatAmount(n: number | null, currency: string | null): string {
 
 export default function Page() {
   const [rows, setRows] = useState<ReceiptRow[]>([]);
-  const [apiKey, setApiKey] = useState('');
-  const [showSettings, setShowSettings] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [uploadMsg, setUploadMsg] = useState<string | null>(null);
+  const [dbError, setDbError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_ROWS);
-      if (raw) setRows(JSON.parse(raw));
-      const key = localStorage.getItem(STORAGE_KEY);
-      if (key) setApiKey(key);
-    } catch {}
-  }, []);
+  const configured = isSupabaseConfigured();
 
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_ROWS, JSON.stringify(rows));
-    } catch {}
-  }, [rows]);
+    if (!configured) {
+      setLoading(false);
+      return;
+    }
+    (async () => {
+      const supabase = getSupabase();
+      if (!supabase) return;
+      const { data, error } = await supabase
+        .from('receipts')
+        .select('*')
+        .order('date', { ascending: true, nullsFirst: false })
+        .order('created_at', { ascending: true });
+      if (error) {
+        setDbError(error.message);
+      } else if (data) {
+        setRows(data.map((d) => toRow(d as ReceiptDb)));
+      }
+      setLoading(false);
+    })();
+  }, [configured]);
 
   const sorted = useMemo(() => sortRows(rows), [rows]);
 
@@ -62,105 +83,124 @@ export default function Page() {
       const ccy = r.currency || '';
       byCcy.set(ccy, (byCcy.get(ccy) || 0) + r.amount);
     }
-    return Array.from(byCcy.entries()).map(([ccy, sum]) => ({
-      ccy,
-      sum,
-    }));
+    return Array.from(byCcy.entries()).map(([ccy, sum]) => ({ ccy, sum }));
   }, [rows]);
+
+  async function persistUpdate(id: string, patch: Partial<ReceiptRow>) {
+    const supabase = getSupabase();
+    if (!supabase) return;
+    const dbPatch: Partial<ReceiptDb> = {};
+    if ('date' in patch) dbPatch.date = patch.date ?? null;
+    if ('amount' in patch) dbPatch.amount = patch.amount ?? null;
+    if ('currency' in patch) dbPatch.currency = patch.currency ?? null;
+    if ('item' in patch) dbPatch.item = patch.item ?? '';
+    if ('description' in patch) dbPatch.description = patch.description ?? '';
+    if ('url' in patch) dbPatch.url = patch.url ?? '';
+    const { error } = await supabase
+      .from('receipts')
+      .update(dbPatch)
+      .eq('id', id);
+    if (error) setDbError(error.message);
+  }
 
   function updateRow(id: string, patch: Partial<ReceiptRow>) {
     setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+    void persistUpdate(id, patch);
   }
 
-  function deleteRow(id: string) {
+  async function deleteRow(id: string) {
     setRows((prev) => prev.filter((r) => r.id !== id));
+    const supabase = getSupabase();
+    if (!supabase) return;
+    const { error } = await supabase.from('receipts').delete().eq('id', id);
+    if (error) setDbError(error.message);
   }
 
-  function addBlankRow() {
-    setRows((prev) => [
-      ...prev,
-      {
-        id: uid(),
+  async function addBlankRow() {
+    const supabase = getSupabase();
+    if (!supabase) return;
+    const { data, error } = await supabase
+      .from('receipts')
+      .insert({
         date: null,
         amount: null,
         currency: null,
         item: '',
         description: '',
         url: '',
-        createdAt: Date.now(),
-      },
-    ]);
+        file_name: null,
+      })
+      .select('*')
+      .single();
+    if (error) {
+      setDbError(error.message);
+      return;
+    }
+    if (data) setRows((prev) => [...prev, toRow(data as ReceiptDb)]);
   }
 
   async function handleFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
-    if (!apiKey && !confirmServerKeyAvailable()) {
-      setShowSettings(true);
-      return;
-    }
     setUploading(true);
     setUploadMsg(`Analyzing ${files.length} file(s)…`);
     try {
       const fd = new FormData();
       Array.from(files).forEach((f) => fd.append('files', f));
-      const res = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: apiKey ? { 'x-anthropic-api-key': apiKey } : undefined,
-        body: fd,
-      });
+      const res = await fetch('/api/analyze', { method: 'POST', body: fd });
       const json = (await res.json()) as AnalyzeResponse;
       if (!res.ok) {
         setUploadMsg(json.error || 'Analysis failed');
         return;
       }
-      const newRows: ReceiptRow[] = [];
+      const supabase = getSupabase();
+      if (!supabase) {
+        setUploadMsg('Supabase is not configured — cannot save rows.');
+        return;
+      }
+      const toInsert: Omit<ReceiptDb, 'id' | 'created_at'>[] = [];
       const errors: string[] = [];
       for (const r of json.results) {
         if (r.ok && r.data) {
-          newRows.push({
-            id: uid(),
+          toInsert.push({
             date: r.data.date,
             amount: r.data.amount,
             currency: r.data.currency,
             item: r.data.item ?? '',
             description: r.data.description ?? '',
             url: '',
-            fileName: r.fileName,
-            createdAt: Date.now(),
+            file_name: r.fileName,
           });
         } else {
           errors.push(`${r.fileName}: ${r.error ?? 'failed'}`);
         }
       }
-      setRows((prev) => sortRows([...prev, ...newRows]));
+      if (toInsert.length > 0) {
+        const { data, error } = await supabase
+          .from('receipts')
+          .insert(toInsert)
+          .select('*');
+        if (error) {
+          setUploadMsg(`Extracted ${toInsert.length} but DB insert failed: ${error.message}`);
+          return;
+        }
+        if (data) {
+          setRows((prev) =>
+            sortRows([...prev, ...data.map((d) => toRow(d as ReceiptDb))]),
+          );
+        }
+      }
       setUploadMsg(
         errors.length === 0
-          ? `Added ${newRows.length} row(s).`
-          : `Added ${newRows.length}, ${errors.length} failed: ${errors.join('; ')}`,
+          ? `Added ${toInsert.length} row(s).`
+          : `Added ${toInsert.length}, ${errors.length} failed: ${errors.join('; ')}`,
       );
     } catch (err) {
-      setUploadMsg(
-        err instanceof Error ? err.message : 'Something went wrong',
-      );
+      setUploadMsg(err instanceof Error ? err.message : 'Something went wrong');
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
       setTimeout(() => setUploadMsg(null), 6000);
     }
-  }
-
-  function confirmServerKeyAvailable() {
-    // We can't check server env from the client without a call; the API will
-    // 400 if neither header nor env has a key. Let the request go through and
-    // rely on the error path.
-    return true;
-  }
-
-  function saveKey() {
-    try {
-      localStorage.setItem(STORAGE_KEY, apiKey);
-    } catch {}
-    setShowSettings(false);
   }
 
   function exportCsv() {
@@ -191,14 +231,47 @@ export default function Page() {
     URL.revokeObjectURL(url);
   }
 
-  function clearAll() {
+  async function clearAll() {
     if (
       rows.length > 0 &&
       !confirm(`Delete all ${rows.length} rows? This cannot be undone.`)
     ) {
       return;
     }
+    const supabase = getSupabase();
+    if (!supabase) return;
+    const { error } = await supabase
+      .from('receipts')
+      .delete()
+      .not('id', 'is', null);
+    if (error) {
+      setDbError(error.message);
+      return;
+    }
     setRows([]);
+  }
+
+  if (!configured) {
+    return (
+      <main className="min-h-screen p-8">
+        <div className="mx-auto max-w-2xl bg-white border border-gray-300 rounded-md p-6 shadow-sm">
+          <h1 className="text-xl font-semibold mb-2">Setup required</h1>
+          <p className="text-sm text-gray-700 mb-3">
+            Supabase environment variables are not set. In Vercel → Project →
+            Settings → Environment Variables, add:
+          </p>
+          <ul className="text-sm font-mono bg-gray-50 border border-gray-200 rounded p-3 mb-3">
+            <li>NEXT_PUBLIC_SUPABASE_URL</li>
+            <li>NEXT_PUBLIC_SUPABASE_ANON_KEY</li>
+            <li>ANTHROPIC_API_KEY</li>
+          </ul>
+          <p className="text-sm text-gray-600">
+            Then redeploy. See <code>README.md</code> for the full setup
+            walk-through.
+          </p>
+        </div>
+      </main>
+    );
   }
 
   return (
@@ -209,8 +282,8 @@ export default function Page() {
             <h1 className="text-2xl font-semibold">Receipt Analyzer</h1>
             <p className="text-sm text-gray-600">
               Upload receipts — Claude extracts amount, item, description, and
-              date. Rows auto-sort by date. Fill the URL column with wherever
-              the receipt lives.
+              date. Rows auto-sort by date and persist to Supabase. Fill the
+              URL column with wherever the receipt lives.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -242,12 +315,6 @@ export default function Page() {
               Export CSV
             </button>
             <button
-              onClick={() => setShowSettings((s) => !s)}
-              className="bg-white border border-gray-300 hover:bg-gray-50 px-3 py-2 rounded-md text-sm"
-            >
-              Settings
-            </button>
-            <button
               onClick={clearAll}
               className="bg-white border border-red-300 text-red-700 hover:bg-red-50 px-3 py-2 rounded-md text-sm"
             >
@@ -256,38 +323,14 @@ export default function Page() {
           </div>
         </header>
 
-        {showSettings && (
-          <div className="bg-white border border-gray-200 rounded-md p-4 mb-4 shadow-sm">
-            <label className="block text-sm font-medium mb-1">
-              Anthropic API key
-            </label>
-            <p className="text-xs text-gray-500 mb-2">
-              Stored in your browser only. Alternatively, set{' '}
-              <code className="bg-gray-100 px-1">ANTHROPIC_API_KEY</code> in{' '}
-              <code className="bg-gray-100 px-1">.env.local</code> on the
-              server and leave this blank.
-            </p>
-            <div className="flex gap-2">
-              <input
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="sk-ant-…"
-                className="flex-1 border border-gray-300 rounded px-2 py-1 text-sm"
-              />
-              <button
-                onClick={saveKey}
-                className="bg-gray-900 text-white px-3 py-1 rounded text-sm"
-              >
-                Save
-              </button>
-            </div>
-          </div>
-        )}
-
         {uploadMsg && (
           <div className="mb-3 text-sm bg-blue-50 border border-blue-200 text-blue-900 rounded px-3 py-2">
             {uploadMsg}
+          </div>
+        )}
+        {dbError && (
+          <div className="mb-3 text-sm bg-red-50 border border-red-200 text-red-900 rounded px-3 py-2">
+            Database error: {dbError}
           </div>
         )}
 
@@ -315,12 +358,16 @@ export default function Page() {
                 </tr>
               </thead>
               <tbody>
-                {sorted.length === 0 && (
+                {loading && (
                   <tr>
-                    <td
-                      colSpan={6}
-                      className="text-center text-gray-500 py-16"
-                    >
+                    <td colSpan={6} className="text-center text-gray-500 py-16">
+                      Loading…
+                    </td>
+                  </tr>
+                )}
+                {!loading && sorted.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="text-center text-gray-500 py-16">
                       No receipts yet. Click{' '}
                       <span className="font-medium">Upload receipts</span> to
                       get started.
@@ -437,8 +484,7 @@ export default function Page() {
         </div>
 
         <p className="text-xs text-gray-500 mt-3">
-          Data is stored in your browser (localStorage). Export to CSV to keep
-          a copy.
+          Rows are stored in your Supabase project. Edits save automatically.
         </p>
       </div>
     </main>

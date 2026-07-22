@@ -35,12 +35,14 @@ function parseJsonLoose(text: string): unknown {
 }
 
 export async function POST(req: NextRequest) {
-  const apiKey =
-    req.headers.get('x-anthropic-api-key') || process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     return NextResponse.json(
-      { error: 'No Anthropic API key configured. Add one in Settings.' },
-      { status: 400 },
+      {
+        error:
+          'ANTHROPIC_API_KEY is not set. Add it in Vercel → Settings → Environment Variables and redeploy.',
+      },
+      { status: 500 },
     );
   }
 
