@@ -2,9 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 
 export const runtime = 'nodejs';
-export const maxDuration = 60;
+export const maxDuration = 120;
 
-type ExtractedReceipt = {
+type ExtractedItem = {
   date: string | null;
   amount: number | null;
   currency: string | null;
@@ -12,16 +12,33 @@ type ExtractedReceipt = {
   description: string | null;
 };
 
-const SYSTEM_PROMPT = `You are a receipt-data extractor. You will receive an image of a receipt, invoice, or bill. Extract the following fields and respond with ONLY a single JSON object — no prose, no markdown fences.
+const SYSTEM_PROMPT = `You are a receipt / statement analyzer. You will receive a receipt, invoice, or a financial statement (bank statement, credit-card statement, PayPal statement, etc.).
 
-Fields:
-- "date": the date the payment was made / receipt was issued, in ISO format "YYYY-MM-DD". If only a month/year is visible, use the 1st of the month. If missing, null.
-- "amount": the total amount paid, as a number (no currency symbol, no thousands separator). Use the grand total including tax, not a subtotal.
-- "currency": the ISO 4217 currency code if determinable (e.g. "AED", "USD", "EUR"), else null.
-- "item": a short label naming the merchant or main purchase (e.g. "Carrefour", "Uber ride", "Etisalat bill"). Max 40 chars.
-- "description": a one-line human-readable summary of what was bought (e.g. "Groceries — 12 items", "Monthly mobile plan"). Max 120 chars.
+Your job:
+1. Identify every actual PAYMENT / EXPENSE / OUTGOING CHARGE in the document. Each becomes one line item.
+2. EXCLUDE the following — never emit rows for these:
+   - Incoming money: deposits, transfers in, refunds received, salary, interest received, cashback, credits
+   - Cashflow-only movements: ATM withdrawals, cash withdrawals, transfers between the user's own accounts, currency conversions, "money in" / "money out" of a PayPal balance that is just moving funds around
+   - Opening / closing / running balances
+   - Section headings and subtotals
+3. For a simple single-purchase receipt (one shop, one purchase), emit exactly one item.
+4. For a statement with many charges, emit one item per charge.
 
-Respond ONLY with the JSON object.`;
+Return ONLY a JSON object of this shape — no prose, no markdown fences:
+
+{
+  "items": [
+    {
+      "date": "YYYY-MM-DD" | null,          // date the payment was made
+      "amount": number | null,               // positive number, no currency symbol, no thousands separator
+      "currency": "AED" | "USD" | "EUR" | ... | null,  // ISO 4217, if determinable
+      "item": string,                        // short label — merchant or main purchase, max 40 chars
+      "description": string                  // one-line human summary, max 120 chars
+    }
+  ]
+}
+
+If the document is unreadable or contains no actual payments, return { "items": [] }.`;
 
 function parseJsonLoose(text: string): unknown {
   const trimmed = text.trim();
@@ -32,6 +49,20 @@ function parseJsonLoose(text: string): unknown {
     if (match) return JSON.parse(match[0]);
     throw new Error('Model did not return JSON');
   }
+}
+
+function normalizeItem(raw: Partial<ExtractedItem>): ExtractedItem {
+  const amt =
+    typeof raw.amount === 'number' && Number.isFinite(raw.amount)
+      ? Math.abs(raw.amount)
+      : null;
+  return {
+    date: raw.date ?? null,
+    amount: amt,
+    currency: raw.currency ?? null,
+    item: raw.item ?? null,
+    description: raw.description ?? null,
+  };
 }
 
 export async function POST(req: NextRequest) {
@@ -70,7 +101,7 @@ export async function POST(req: NextRequest) {
 
         const message = await client.messages.create({
           model: 'claude-sonnet-5',
-          max_tokens: 512,
+          max_tokens: 8192,
           system: SYSTEM_PROMPT,
           messages: [
             {
@@ -86,7 +117,7 @@ export async function POST(req: NextRequest) {
                 } as unknown as Anthropic.ImageBlockParam,
                 {
                   type: 'text',
-                  text: 'Extract the receipt fields as JSON per the schema.',
+                  text: 'Extract every actual payment/expense line item as JSON per the schema. Exclude withdrawals and incoming money.',
                 },
               ],
             },
@@ -98,25 +129,18 @@ export async function POST(req: NextRequest) {
         );
         if (!textBlock) throw new Error('No text in model response');
 
-        const parsed = parseJsonLoose(textBlock.text) as ExtractedReceipt;
-        return {
-          fileName: file.name,
-          ok: true,
-          data: {
-            date: parsed.date ?? null,
-            amount:
-              typeof parsed.amount === 'number' && Number.isFinite(parsed.amount)
-                ? parsed.amount
-                : null,
-            currency: parsed.currency ?? null,
-            item: parsed.item ?? null,
-            description: parsed.description ?? null,
-          },
+        const parsed = parseJsonLoose(textBlock.text) as {
+          items?: Partial<ExtractedItem>[];
         };
+        const items = Array.isArray(parsed.items)
+          ? parsed.items.map(normalizeItem).filter((i) => i.amount != null)
+          : [];
+
+        return { fileName: file.name, ok: true as const, items };
       } catch (err) {
         return {
           fileName: file.name,
-          ok: false,
+          ok: false as const,
           error: err instanceof Error ? err.message : 'Unknown error',
         };
       }

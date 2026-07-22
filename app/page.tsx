@@ -159,17 +159,21 @@ export default function Page() {
       }
       const toInsert: Omit<ReceiptDb, 'id' | 'created_at'>[] = [];
       const errors: string[] = [];
+      const perFile: string[] = [];
       for (const r of json.results) {
-        if (r.ok && r.data) {
-          toInsert.push({
-            date: r.data.date,
-            amount: r.data.amount,
-            currency: r.data.currency,
-            item: r.data.item ?? '',
-            description: r.data.description ?? '',
-            url: '',
-            file_name: r.fileName,
-          });
+        if (r.ok && r.items) {
+          for (const it of r.items) {
+            toInsert.push({
+              date: it.date,
+              amount: it.amount,
+              currency: it.currency,
+              item: it.item ?? '',
+              description: it.description ?? '',
+              url: '',
+              file_name: r.fileName,
+            });
+          }
+          perFile.push(`${r.fileName}: ${r.items.length}`);
         } else {
           errors.push(`${r.fileName}: ${r.error ?? 'failed'}`);
         }
@@ -190,10 +194,11 @@ export default function Page() {
           );
         }
       }
+      const summary = perFile.length ? ` (${perFile.join(', ')})` : '';
       setUploadMsg(
         errors.length === 0
-          ? `Added ${toInsert.length} row(s).`
-          : `Added ${toInsert.length}, ${errors.length} failed: ${errors.join('; ')}`,
+          ? `Added ${toInsert.length} row(s)${summary}.`
+          : `Added ${toInsert.length}${summary}. ${errors.length} file(s) failed: ${errors.join('; ')}`,
       );
     } catch (err) {
       setUploadMsg(err instanceof Error ? err.message : 'Something went wrong');

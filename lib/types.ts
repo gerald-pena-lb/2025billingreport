@@ -10,17 +10,19 @@ export type ReceiptRow = {
   createdAt: number;           // epoch ms, derived from created_at
 };
 
+export type ExtractedItem = {
+  date: string | null;
+  amount: number | null;
+  currency: string | null;
+  item: string | null;
+  description: string | null;
+};
+
 export type AnalyzeResult = {
   fileName: string;
   ok: boolean;
   error?: string;
-  data?: {
-    date: string | null;
-    amount: number | null;
-    currency: string | null;
-    item: string | null;
-    description: string | null;
-  };
+  items?: ExtractedItem[];
 };
 
 export type AnalyzeResponse = {
