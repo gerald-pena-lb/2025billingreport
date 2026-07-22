@@ -399,8 +399,8 @@ export default function Page() {
 
   if (!configured) {
     return (
-      <main className="min-h-screen p-8">
-        <div className="mx-auto max-w-2xl bg-white border border-gray-300 rounded-md p-6 shadow-sm">
+      <main className="min-h-screen p-4 md:p-8">
+        <div className="mx-auto max-w-2xl bg-white border border-gray-300 rounded-md p-4 md:p-6 shadow-sm">
           <h1 className="text-xl font-semibold mb-2">Setup required</h1>
           <p className="text-sm text-gray-700 mb-3">
             Supabase environment variables are not set. In Vercel → Project →
@@ -423,22 +423,24 @@ export default function Page() {
   const nonPaymentCount = rows.length - (kindCounts.get('payment') ?? 0);
 
   return (
-    <main className="min-h-screen p-4 md:p-8">
+    <main className="min-h-screen p-3 md:p-8">
       <div className="mx-auto max-w-7xl">
-        <header className="flex flex-wrap items-center justify-between gap-3 mb-4">
-          <div>
-            <h1 className="text-2xl font-semibold">Receipt Analyzer</h1>
-            <p className="text-sm text-gray-600">
+        <header className="mb-4">
+          <div className="mb-3">
+            <h1 className="text-xl md:text-2xl font-semibold">
+              Receipt Analyzer
+            </h1>
+            <p className="text-xs md:text-sm text-gray-600 mt-1">
               Upload receipts or statements — Claude extracts every line and
               tags each as payment / incoming / conversion / etc. Scan the
               badges and delete anything that isn't a real expense.
             </p>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="grid grid-cols-2 md:flex md:flex-wrap gap-2">
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={uploading}
-              className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white px-4 py-2 rounded-md text-sm font-medium"
+              className="col-span-2 md:col-auto bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white px-4 py-2.5 md:py-2 rounded-md text-sm font-medium"
             >
               {uploading ? 'Analyzing…' : 'Upload receipts'}
             </button>
@@ -478,6 +480,38 @@ export default function Page() {
             </button>
           </div>
         </header>
+
+        {/* Mobile-only filter bar (headers are inside the table on desktop) */}
+        <div className="md:hidden grid grid-cols-1 gap-2 mb-3">
+          <select
+            value={kindFilter}
+            onChange={(e) => setKindFilter(e.target.value as 'all' | ItemKind)}
+            className="w-full border border-gray-300 rounded px-2 py-2 text-sm bg-white"
+          >
+            <option value="all">All categories ({rows.length})</option>
+            {ALL_KINDS.filter((k) => kindCounts.get(k)).map((k) => (
+              <option key={k} value={k}>
+                {KIND_LABEL[k]} ({kindCounts.get(k)})
+              </option>
+            ))}
+          </select>
+          <div className="grid grid-cols-2 gap-2">
+            <input
+              type="text"
+              value={itemFilter}
+              onChange={(e) => setItemFilter(e.target.value)}
+              placeholder="Filter by item…"
+              className="border border-gray-300 rounded px-2 py-2 text-sm"
+            />
+            <input
+              type="text"
+              value={descFilter}
+              onChange={(e) => setDescFilter(e.target.value)}
+              placeholder="Filter by description…"
+              className="border border-gray-300 rounded px-2 py-2 text-sm"
+            />
+          </div>
+        </div>
 
         <div className="flex flex-wrap items-center gap-3 mb-3 text-sm">
           <span className="text-gray-500 text-xs">
@@ -519,7 +553,8 @@ export default function Page() {
           </div>
         )}
 
-        <div className="bg-white border border-gray-300 rounded-md shadow-sm overflow-hidden">
+        {/* Desktop / tablet: spreadsheet view */}
+        <div className="hidden md:block bg-white border border-gray-300 rounded-md shadow-sm overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm border-collapse">
               <thead className="bg-gray-100 text-left text-xs uppercase tracking-wide text-gray-600 sticky top-0 z-10">
@@ -756,10 +791,188 @@ export default function Page() {
           </div>
         </div>
 
+        {/* Mobile: card view */}
+        <div className="md:hidden space-y-2">
+          {loading && (
+            <div className="bg-white border border-gray-300 rounded-md p-6 text-center text-gray-500 text-sm">
+              Loading…
+            </div>
+          )}
+          {!loading && visible.length === 0 && (
+            <div className="bg-white border border-gray-300 rounded-md p-6 text-center text-gray-500 text-sm">
+              {rows.length === 0
+                ? 'No receipts yet. Tap Upload receipts to get started.'
+                : 'No rows match the current filter.'}
+            </div>
+          )}
+          {visible.map((r) => (
+            <div
+              key={r.id}
+              className={`bg-white border border-gray-300 rounded-md p-3 shadow-sm ${
+                r.kind !== 'payment' ? 'opacity-70' : ''
+              }`}
+            >
+              <div className="flex items-start justify-between gap-2 mb-2">
+                <select
+                  value={r.kind}
+                  onChange={(e) =>
+                    updateRow(r.id, { kind: e.target.value as ItemKind })
+                  }
+                  className={`text-xs px-2 py-1 rounded border ${KIND_STYLE[r.kind]} outline-none`}
+                >
+                  {ALL_KINDS.map((k) => (
+                    <option key={k} value={k}>
+                      {KIND_LABEL[k]}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => deleteRow(r.id)}
+                  className="text-gray-400 hover:text-red-600 text-xl leading-none px-2 -mt-1"
+                  aria-label="Delete row"
+                >
+                  ×
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 mb-2">
+                <label className="block">
+                  <span className="block text-[10px] uppercase tracking-wide text-gray-500 mb-0.5">
+                    Date
+                  </span>
+                  <input
+                    type="date"
+                    value={r.date ?? ''}
+                    onChange={(e) =>
+                      updateRow(r.id, { date: e.target.value || null })
+                    }
+                    className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm font-mono"
+                  />
+                </label>
+                <label className="block">
+                  <span className="block text-[10px] uppercase tracking-wide text-gray-500 mb-0.5">
+                    Currency
+                  </span>
+                  <input
+                    type="text"
+                    value={r.currency ?? ''}
+                    onChange={(e) =>
+                      updateRow(r.id, {
+                        currency: e.target.value.toUpperCase() || null,
+                      })
+                    }
+                    placeholder="CCY"
+                    className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm font-mono uppercase"
+                    maxLength={4}
+                  />
+                </label>
+                <label className="block">
+                  <span className="block text-[10px] uppercase tracking-wide text-gray-500 mb-0.5">
+                    Amount
+                  </span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    inputMode="decimal"
+                    value={r.amount ?? ''}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      updateRow(r.id, {
+                        amount: v === '' ? null : Number(v),
+                      });
+                    }}
+                    placeholder="0.00"
+                    className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm font-mono text-right"
+                  />
+                </label>
+                <label className="block">
+                  <span className="block text-[10px] uppercase tracking-wide text-gray-500 mb-0.5">
+                    Value paid
+                  </span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    inputMode="decimal"
+                    value={r.value ?? ''}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      updateRow(r.id, {
+                        value: v === '' ? null : Number(v),
+                      });
+                    }}
+                    placeholder="0.00"
+                    className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm font-mono text-right"
+                  />
+                </label>
+              </div>
+
+              <label className="block mb-2">
+                <span className="block text-[10px] uppercase tracking-wide text-gray-500 mb-0.5">
+                  Item
+                </span>
+                <input
+                  type="text"
+                  value={r.item}
+                  onChange={(e) => updateRow(r.id, { item: e.target.value })}
+                  placeholder="Merchant / item"
+                  className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
+                />
+              </label>
+
+              <label className="block mb-2">
+                <span className="block text-[10px] uppercase tracking-wide text-gray-500 mb-0.5">
+                  Description
+                </span>
+                <textarea
+                  value={r.description}
+                  onChange={(e) =>
+                    updateRow(r.id, { description: e.target.value })
+                  }
+                  placeholder="Description"
+                  rows={2}
+                  className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm resize-y"
+                />
+              </label>
+
+              <label className="block">
+                <span className="block text-[10px] uppercase tracking-wide text-gray-500 mb-0.5">
+                  URL / location
+                </span>
+                <input
+                  type="url"
+                  value={r.url}
+                  onChange={(e) => updateRow(r.id, { url: e.target.value })}
+                  placeholder="https://…"
+                  inputMode="url"
+                  className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
+                />
+              </label>
+            </div>
+          ))}
+          {total.length > 0 && (
+            <div className="bg-gray-100 border border-gray-300 rounded-md p-3 flex flex-wrap justify-between items-center gap-2">
+              <span className="text-xs uppercase tracking-wide text-gray-500 font-medium">
+                Total value{' '}
+                {kindFilter === 'all' ? '(shown)' : `(${kindFilter})`}
+              </span>
+              <span className="font-mono text-sm text-right">
+                {total.map((t) => (
+                  <span key={t.ccy} className="ml-3">
+                    {formatAmount(t.sum, t.ccy || null)}
+                  </span>
+                ))}
+              </span>
+            </div>
+          )}
+        </div>
+
         <p className="text-xs text-gray-500 mt-3">
           Rows are stored in your Supabase project. Edits save automatically.
           Change a row's kind from the dropdown if the classifier got it wrong.
-          Hover the description cell to see the full text.
+          <span className="hidden md:inline">
+            {' '}
+            Hover the description cell to see the full text.
+          </span>
         </p>
       </div>
 
