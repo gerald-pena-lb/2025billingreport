@@ -36,6 +36,8 @@ export type AnalyzeResult = {
   ok: boolean;
   error?: string;
   items?: ExtractedItem[];
+  pages?: number;
+  pageNotes?: string[];
 };
 
 export type AnalyzeResponse = {

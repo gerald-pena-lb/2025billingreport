@@ -278,7 +278,11 @@ export default function Page() {
           const breakdown = Array.from(kindCount.entries())
             .map(([k, n]) => `${n} ${k}`)
             .join(', ');
-          perFile.push(`${r.fileName}: ${r.items.length} (${breakdown})`);
+          const pageInfo =
+            r.pages && r.pages > 1 ? ` [${r.pageNotes?.join(', ')}]` : '';
+          perFile.push(
+            `${r.fileName}: ${r.items.length} (${breakdown})${pageInfo}`,
+          );
         } else {
           errors.push(`${r.fileName}: ${r.error ?? 'failed'}`);
         }
