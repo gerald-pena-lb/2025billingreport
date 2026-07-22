@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import type { AnalyzeResponse, ItemKind, ReceiptRow } from '@/lib/types';
 import {
   getSupabase,
@@ -75,6 +76,125 @@ function toRow(r: ReceiptDb): ReceiptRow {
   };
 }
 
+const MONTH_NAMES = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+function monthKey(date: string | null): string | null {
+  if (!date) return null;
+  return date.slice(0, 7); // YYYY-MM
+}
+
+function monthLabel(key: string): string {
+  const [y, m] = key.split('-');
+  const idx = Number(m) - 1;
+  return `${MONTH_NAMES[idx] ?? m} ${y}`;
+}
+
+type MultiSelectOption = { value: string; label: string; count?: number };
+
+function MultiSelectMenu({
+  buttonLabel,
+  options,
+  selected,
+  onChange,
+  align = 'left',
+  className = '',
+}: {
+  buttonLabel: ReactNode;
+  options: MultiSelectOption[];
+  selected: Set<string>;
+  onChange: (next: Set<string>) => void;
+  align?: 'left' | 'right';
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDocClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [open]);
+
+  function toggle(v: string) {
+    const next = new Set(selected);
+    if (next.has(v)) next.delete(v);
+    else next.add(v);
+    onChange(next);
+  }
+
+  return (
+    <div ref={ref} className={`relative ${className}`}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="w-full text-left text-[11px] font-normal normal-case border border-gray-300 bg-white rounded px-2 py-1 truncate"
+      >
+        {buttonLabel} <span className="text-gray-400">▾</span>
+      </button>
+      {open && (
+        <div
+          className={`absolute z-30 mt-1 ${align === 'right' ? 'right-0' : 'left-0'} min-w-[10rem] max-h-64 overflow-auto bg-white border border-gray-300 rounded-md shadow-lg text-[12px] font-normal normal-case`}
+        >
+          <div className="flex justify-between px-2 py-1.5 border-b bg-gray-50 sticky top-0">
+            <button
+              type="button"
+              onClick={() => onChange(new Set(options.map((o) => o.value)))}
+              className="text-blue-600 hover:underline text-[11px]"
+            >
+              All
+            </button>
+            <button
+              type="button"
+              onClick={() => onChange(new Set())}
+              className="text-gray-500 hover:underline text-[11px]"
+            >
+              None
+            </button>
+          </div>
+          {options.length === 0 && (
+            <div className="px-3 py-2 text-gray-400 text-xs italic">
+              No options
+            </div>
+          )}
+          {options.map((o) => {
+            const checked = selected.has(o.value);
+            return (
+              <label
+                key={o.value}
+                className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer"
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => toggle(o.value)}
+                />
+                <span className="flex-1 text-gray-800">{o.label}</span>
+                {o.count != null && (
+                  <span className="text-gray-400 text-[11px]">{o.count}</span>
+                )}
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function kindCountsHelper(rows: ReceiptRow[], k: ItemKind): number {
+  let n = 0;
+  for (const r of rows) if (r.kind === k) n++;
+  return n;
+}
+
 function formatAmount(n: number | null, currency: string | null): string {
   if (n === null || Number.isNaN(n)) return '';
   const s = n.toLocaleString(undefined, {
@@ -90,7 +210,8 @@ export default function Page() {
   const [uploading, setUploading] = useState(false);
   const [uploadMsg, setUploadMsg] = useState<string | null>(null);
   const [dbError, setDbError] = useState<string | null>(null);
-  const [kindFilter, setKindFilter] = useState<'all' | ItemKind>('all');
+  const [kindFilter, setKindFilter] = useState<Set<string>>(new Set());
+  const [monthFilter, setMonthFilter] = useState<Set<string>>(new Set());
   const [itemFilter, setItemFilter] = useState('');
   const [descFilter, setDescFilter] = useState('');
   const [hoverDesc, setHoverDesc] = useState<{
@@ -129,15 +250,56 @@ export default function Page() {
     const it = itemFilter.trim().toLowerCase();
     const de = descFilter.trim().toLowerCase();
     return sorted.filter((r) => {
-      if (kindFilter !== 'all' && r.kind !== kindFilter) return false;
+      if (kindFilter.size > 0 && !kindFilter.has(r.kind)) return false;
+      if (monthFilter.size > 0) {
+        const mk = monthKey(r.date);
+        if (!mk || !monthFilter.has(mk)) return false;
+      }
       if (it && !r.item.toLowerCase().includes(it)) return false;
       if (de && !r.description.toLowerCase().includes(de)) return false;
       return true;
     });
-  }, [sorted, kindFilter, itemFilter, descFilter]);
+  }, [sorted, kindFilter, monthFilter, itemFilter, descFilter]);
 
   const filterActive =
-    kindFilter !== 'all' || itemFilter.trim() !== '' || descFilter.trim() !== '';
+    kindFilter.size > 0 ||
+    monthFilter.size > 0 ||
+    itemFilter.trim() !== '' ||
+    descFilter.trim() !== '';
+
+  const monthOptions = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of rows) {
+      const k = monthKey(r.date);
+      if (!k) continue;
+      m.set(k, (m.get(k) ?? 0) + 1);
+    }
+    return Array.from(m.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([value, count]) => ({ value, label: monthLabel(value), count }));
+  }, [rows]);
+
+  const kindOptions = useMemo(
+    () =>
+      ALL_KINDS.filter((k) => kindCountsHelper(rows, k) > 0).map((k) => ({
+        value: k,
+        label: KIND_LABEL[k],
+        count: kindCountsHelper(rows, k),
+      })),
+    [rows],
+  );
+
+  function kindFilterLabel() {
+    if (kindFilter.size === 0) return `All kinds (${rows.length})`;
+    if (kindFilter.size === 1)
+      return KIND_LABEL[Array.from(kindFilter)[0] as ItemKind];
+    return `${kindFilter.size} kinds`;
+  }
+  function monthFilterLabel() {
+    if (monthFilter.size === 0) return `All months`;
+    if (monthFilter.size === 1) return monthLabel(Array.from(monthFilter)[0]);
+    return `${monthFilter.size} months`;
+  }
 
   const kindCounts = useMemo(() => {
     const m = new Map<ItemKind, number>();
@@ -483,18 +645,21 @@ export default function Page() {
 
         {/* Mobile-only filter bar (headers are inside the table on desktop) */}
         <div className="md:hidden grid grid-cols-1 gap-2 mb-3">
-          <select
-            value={kindFilter}
-            onChange={(e) => setKindFilter(e.target.value as 'all' | ItemKind)}
-            className="w-full border border-gray-300 rounded px-2 py-2 text-sm bg-white"
-          >
-            <option value="all">All categories ({rows.length})</option>
-            {ALL_KINDS.filter((k) => kindCounts.get(k)).map((k) => (
-              <option key={k} value={k}>
-                {KIND_LABEL[k]} ({kindCounts.get(k)})
-              </option>
-            ))}
-          </select>
+          <div className="grid grid-cols-2 gap-2">
+            <MultiSelectMenu
+              buttonLabel={monthFilterLabel()}
+              options={monthOptions}
+              selected={monthFilter}
+              onChange={setMonthFilter}
+            />
+            <MultiSelectMenu
+              buttonLabel={kindFilterLabel()}
+              options={kindOptions}
+              selected={kindFilter}
+              onChange={setKindFilter}
+              align="right"
+            />
+          </div>
           <div className="grid grid-cols-2 gap-2">
             <input
               type="text"
@@ -520,7 +685,8 @@ export default function Page() {
           {filterActive && (
             <button
               onClick={() => {
-                setKindFilter('all');
+                setKindFilter(new Set());
+                setMonthFilter(new Set());
                 setItemFilter('');
                 setDescFilter('');
               }}
@@ -559,9 +725,15 @@ export default function Page() {
             <table className="w-full text-sm border-collapse">
               <thead className="bg-gray-100 text-left text-xs uppercase tracking-wide text-gray-600 sticky top-0 z-10">
                 <tr>
-                  <th className="border-b border-gray-300 px-2 py-2 w-32 align-top">
+                  <th className="border-b border-gray-300 px-2 py-2 w-36 align-top">
                     <div>Date of payment</div>
-                    <div className="h-6 mt-1" />
+                    <MultiSelectMenu
+                      buttonLabel={monthFilterLabel()}
+                      options={monthOptions}
+                      selected={monthFilter}
+                      onChange={setMonthFilter}
+                      className="mt-1"
+                    />
                   </th>
                   <th className="border-b border-gray-300 px-2 py-2 w-32 align-top">
                     <div>Amount</div>
@@ -573,21 +745,13 @@ export default function Page() {
                   </th>
                   <th className="border-b border-gray-300 px-2 py-2 w-36 align-top">
                     <div>Kind</div>
-                    <select
-                      value={kindFilter}
-                      onChange={(e) =>
-                        setKindFilter(e.target.value as 'all' | ItemKind)
-                      }
-                      title="Filter by kind"
-                      className="mt-1 w-full text-[11px] font-normal normal-case border border-gray-300 bg-white rounded px-1 py-0.5"
-                    >
-                      <option value="all">All ({rows.length})</option>
-                      {ALL_KINDS.filter((k) => kindCounts.get(k)).map((k) => (
-                        <option key={k} value={k}>
-                          {KIND_LABEL[k]} ({kindCounts.get(k)})
-                        </option>
-                      ))}
-                    </select>
+                    <MultiSelectMenu
+                      buttonLabel={kindFilterLabel()}
+                      options={kindOptions}
+                      selected={kindFilter}
+                      onChange={setKindFilter}
+                      className="mt-1"
+                    />
                   </th>
                   <th className="border-b border-gray-300 px-2 py-2 w-48 align-top">
                     <div>Item</div>
@@ -775,7 +939,7 @@ export default function Page() {
                   <tr>
                     <td className="px-2 py-2 text-right text-xs uppercase tracking-wide text-gray-500 font-medium">
                       Total value{' '}
-                      {kindFilter === 'all' ? '(shown)' : `(${kindFilter})`}
+                      (shown)
                     </td>
                     <td className="px-2 py-2 font-mono text-right" colSpan={7}>
                       {total.map((t) => (
@@ -953,7 +1117,7 @@ export default function Page() {
             <div className="bg-gray-100 border border-gray-300 rounded-md p-3 flex flex-wrap justify-between items-center gap-2">
               <span className="text-xs uppercase tracking-wide text-gray-500 font-medium">
                 Total value{' '}
-                {kindFilter === 'all' ? '(shown)' : `(${kindFilter})`}
+                (shown)
               </span>
               <span className="font-mono text-sm text-right">
                 {total.map((t) => (
