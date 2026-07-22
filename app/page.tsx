@@ -180,7 +180,8 @@ export default function Page() {
           .insert(toInsert)
           .select('*');
         if (error) {
-          setUploadMsg(`Extracted ${toInsert.length} but DB insert failed: ${error.message}`);
+          setDbError(error.message);
+          setUploadMsg(`Extracted ${toInsert.length} but DB insert failed.`);
           return;
         }
         if (data) {
@@ -243,12 +244,28 @@ export default function Page() {
     const { error } = await supabase
       .from('receipts')
       .delete()
-      .not('id', 'is', null);
+      .gte('created_at', '1900-01-01');
     if (error) {
       setDbError(error.message);
       return;
     }
     setRows([]);
+  }
+
+  function dbErrorHint(msg: string): string | null {
+    if (/invalid path/i.test(msg)) {
+      return 'Check NEXT_PUBLIC_SUPABASE_URL in Vercel — it should look like https://xxxx.supabase.co with no trailing slash and no /rest/v1 suffix. After fixing, redeploy.';
+    }
+    if (/relation .* does not exist/i.test(msg) || /receipts.*not found/i.test(msg)) {
+      return 'The `receipts` table is missing. Open Supabase → SQL Editor and run supabase/schema.sql.';
+    }
+    if (/jwt|apikey|invalid api key/i.test(msg)) {
+      return 'Check NEXT_PUBLIC_SUPABASE_ANON_KEY in Vercel — it should be the anon (public) key from Supabase → Project Settings → API. Redeploy after changing.';
+    }
+    if (/row-level security|rls/i.test(msg)) {
+      return 'RLS is blocking the request. Re-run supabase/schema.sql to install the anon policies.';
+    }
+    return null;
   }
 
   if (!configured) {
@@ -330,7 +347,18 @@ export default function Page() {
         )}
         {dbError && (
           <div className="mb-3 text-sm bg-red-50 border border-red-200 text-red-900 rounded px-3 py-2">
-            Database error: {dbError}
+            <div>Database error: {dbError}</div>
+            {dbErrorHint(dbError) && (
+              <div className="mt-1 text-red-800">
+                Likely fix — {dbErrorHint(dbError)}
+              </div>
+            )}
+            <button
+              onClick={() => setDbError(null)}
+              className="mt-2 text-xs underline"
+            >
+              dismiss
+            </button>
           </div>
         )}
 
