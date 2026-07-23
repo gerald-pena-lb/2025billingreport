@@ -35,6 +35,13 @@ const KIND_STYLE: Record<ItemKind, string> = {
 const OWNERS = ['Alinka', 'Anette', 'Gerald', 'Glenda'] as const;
 const UNASSIGNED = '__unassigned__';
 
+const OWNER_STYLE: Record<string, string> = {
+  Gerald: 'bg-blue-100 text-blue-900 border-blue-200',
+  Alinka: 'bg-green-100 text-green-900 border-green-200',
+  Anette: 'bg-amber-100 text-amber-900 border-amber-200',
+  Glenda: 'bg-gray-100 text-gray-900 border-gray-200',
+};
+
 const ALL_KINDS: ItemKind[] = [
   'payment',
   'incoming',
@@ -1069,7 +1076,11 @@ export default function Page() {
                             owner: e.target.value || null,
                           })
                         }
-                        className="w-full text-xs px-2 py-1 rounded border border-gray-300 bg-white outline-none"
+                        className={`w-full text-xs px-2 py-1 rounded border outline-none font-medium ${
+                          r.owner && OWNER_STYLE[r.owner]
+                            ? OWNER_STYLE[r.owner]
+                            : 'bg-white border-gray-300'
+                        }`}
                       >
                         <option value="">— Unassigned —</option>
                         {OWNERS.map((o) => (
@@ -1291,7 +1302,11 @@ export default function Page() {
                   onChange={(e) =>
                     updateRow(r.id, { owner: e.target.value || null })
                   }
-                  className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
+                  className={`w-full rounded px-2 py-1.5 text-sm font-medium border outline-none ${
+                    r.owner && OWNER_STYLE[r.owner]
+                      ? OWNER_STYLE[r.owner]
+                      : 'bg-white border-gray-300'
+                  }`}
                 >
                   <option value="">— Unassigned —</option>
                   {OWNERS.map((o) => (
