@@ -84,6 +84,7 @@ function toRow(r: ReceiptDb): ReceiptRow {
     url: r.url ?? '',
     kind: normKind(r.kind),
     owner: r.owner ?? null,
+    invoiceId: r.invoice_id ?? null,
     fileName: r.file_name,
     createdAt: new Date(r.created_at).getTime(),
   };
@@ -236,7 +237,10 @@ export default function Page() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkOwnerValue, setBulkOwnerValue] = useState('');
   const [sortByValue, setSortByValue] = useState(false);
+  const [invoices, setInvoices] = useState<Record<string, { fileName: string; createdAt: string }>>({});
+  const [uploadingInvoice, setUploadingInvoice] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const invoiceInputRef = useRef<HTMLInputElement | null>(null);
 
   const configured = isSupabaseConfigured();
 
@@ -425,6 +429,113 @@ export default function Page() {
       setSelected(new Set());
       setBulkOwnerValue('');
     }
+  }
+
+  async function handleInvoiceFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    setUploadingInvoice(true);
+    setUploadMsg(null);
+    try {
+      const formData = new FormData();
+      for (let i = 0; i < files.length; i++) {
+        formData.append('files', files[i]);
+      }
+
+      const response = await fetch('/api/upload-invoice', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const json = (await response.json()) as unknown;
+      if (!response.ok) {
+        const err = json as { error?: string };
+        setUploadMsg(`Invoice upload failed: ${err.error || 'Unknown error'}`);
+        return;
+      }
+
+      const result = json as {
+        success?: boolean;
+        invoices?: Array<{
+          invoiceId: string;
+          fileName: string;
+          items: Array<{
+            date: string | null;
+            amount: number | null;
+            currency: string | null;
+            description: string;
+          }>;
+        }>;
+      };
+
+      if (result.invoices) {
+        const supabase = getSupabase();
+        if (!supabase) return;
+
+        let matchedCount = 0;
+
+        for (const inv of result.invoices) {
+          for (const item of inv.items) {
+            const amt = item.amount;
+            if (!amt) continue;
+
+            const matches = rows.filter((r) => {
+              const rAmt = r.value ?? r.amount;
+              if (!rAmt) return false;
+              return Math.abs(rAmt - amt) < 0.01;
+            });
+
+            for (const m of matches) {
+              if (!m.invoiceId) {
+                await supabase
+                  .from('receipts')
+                  .update({ invoice_id: inv.invoiceId })
+                  .eq('id', m.id);
+                matchedCount++;
+                setRows((prev) =>
+                  prev.map((r) =>
+                    r.id === m.id ? { ...r, invoiceId: inv.invoiceId } : r,
+                  ),
+                );
+              }
+            }
+          }
+        }
+
+        setUploadMsg(`Uploaded ${result.invoices.length} invoice(s) and matched ${matchedCount} receipt(s).`);
+        setInvoices((prev) => ({
+          ...prev,
+          ...Object.fromEntries(
+            result.invoices!.map((inv) => [
+              inv.invoiceId,
+              { fileName: inv.fileName, createdAt: new Date().toISOString() },
+            ]),
+          ),
+        }));
+      }
+    } catch (err) {
+      setUploadMsg(err instanceof Error ? err.message : 'Invoice upload failed');
+    } finally {
+      setUploadingInvoice(false);
+    }
+  }
+
+  async function viewInvoice(invoiceId: string) {
+    const supabase = getSupabase();
+    if (!supabase) return;
+    const { data, error } = await supabase
+      .from('invoices')
+      .select('file_data, mime_type')
+      .eq('id', invoiceId)
+      .single();
+
+    if (error || !data) {
+      setDbError('Failed to load invoice');
+      return;
+    }
+
+    const blob = new Blob([Buffer.from(data.file_data, 'base64')], { type: data.mime_type });
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank');
   }
 
   async function deleteRow(id: string) {
@@ -702,6 +813,21 @@ export default function Page() {
               accept="image/*,application/pdf"
               className="hidden"
               onChange={(e) => handleFiles(e.target.files)}
+            />
+            <button
+              onClick={() => invoiceInputRef.current?.click()}
+              disabled={uploadingInvoice}
+              className="col-span-2 md:col-auto bg-purple-600 hover:bg-purple-700 disabled:bg-purple-300 text-white px-4 py-2.5 md:py-2 rounded-md text-sm font-medium"
+            >
+              {uploadingInvoice ? 'Processing…' : 'Upload invoices'}
+            </button>
+            <input
+              ref={invoiceInputRef}
+              type="file"
+              multiple
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => handleInvoiceFiles(e.target.files)}
             />
             <button
               onClick={addBlankRow}
@@ -1141,7 +1267,16 @@ export default function Page() {
                         placeholder="https://…"
                       />
                     </td>
-                    <td className="border-b border-gray-200 text-center">
+                    <td className="border-b border-gray-200 text-center flex items-center justify-center gap-1">
+                      {r.invoiceId && (
+                        <button
+                          onClick={() => viewInvoice(r.invoiceId!)}
+                          title="View invoice"
+                          className="text-gray-400 hover:text-blue-600 px-1 text-sm font-medium"
+                        >
+                          📄
+                        </button>
+                      )}
                       <button
                         onClick={() => deleteRow(r.id)}
                         title="Delete row"
@@ -1225,13 +1360,24 @@ export default function Page() {
                     ))}
                   </select>
                 </div>
-                <button
-                  onClick={() => deleteRow(r.id)}
-                  className="text-gray-400 hover:text-red-600 text-xl leading-none px-2 -mt-1"
-                  aria-label="Delete row"
-                >
-                  ×
-                </button>
+                <div className="flex gap-1">
+                  {r.invoiceId && (
+                    <button
+                      onClick={() => viewInvoice(r.invoiceId!)}
+                      className="text-gray-400 hover:text-blue-600 text-xl leading-none px-2 -mt-1"
+                      aria-label="View invoice"
+                    >
+                      📄
+                    </button>
+                  )}
+                  <button
+                    onClick={() => deleteRow(r.id)}
+                    className="text-gray-400 hover:text-red-600 text-xl leading-none px-2 -mt-1"
+                    aria-label="Delete row"
+                  >
+                    ×
+                  </button>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-2 mb-2">

@@ -44,9 +44,19 @@ export type ReceiptDb = {
   kind: string;
   value: number | null;
   owner: string | null;
+  invoice_id: string | null;
   created_at: string;
 };
 
-export type ReceiptInsert = Omit<ReceiptDb, 'id' | 'created_at' | 'owner'> & {
+export type ReceiptInsert = Omit<ReceiptDb, 'id' | 'created_at' | 'owner' | 'invoice_id'> & {
   owner?: string | null;
+  invoice_id?: string | null;
+};
+
+export type InvoiceDb = {
+  id: string;
+  file_name: string;
+  file_data: string;
+  mime_type: string;
+  created_at: string;
 };

@@ -3,6 +3,14 @@
 
 create extension if not exists "pgcrypto";
 
+create table if not exists public.invoices (
+  id           uuid primary key default gen_random_uuid(),
+  file_name    text not null,
+  file_data    bytea not null,
+  mime_type    text not null default 'application/pdf',
+  created_at   timestamptz not null default now()
+);
+
 create table if not exists public.receipts (
   id           uuid primary key default gen_random_uuid(),
   date         date,
@@ -16,6 +24,7 @@ create table if not exists public.receipts (
   kind         text not null default 'payment',
   value        numeric(14, 2),
   owner        text,
+  invoice_id   uuid references public.invoices(id) on delete set null,
   created_at   timestamptz not null default now()
 );
 
@@ -28,13 +37,17 @@ alter table public.receipts
   add column if not exists owner text;
 alter table public.receipts
   add column if not exists notes text not null default '';
+alter table public.receipts
+  add column if not exists invoice_id uuid references public.invoices(id) on delete set null;
 
 create index if not exists receipts_date_idx on public.receipts (date nulls last, created_at);
+create index if not exists receipts_invoice_id_idx on public.receipts (invoice_id);
 
 -- Row-level security. This is a personal tool with no auth: policies below
 -- allow anyone with the anon key to read/write. If you deploy publicly, add
 -- Supabase Auth and tighten these policies (e.g. `auth.uid() = user_id`).
 alter table public.receipts enable row level security;
+alter table public.invoices enable row level security;
 
 drop policy if exists "anon read"   on public.receipts;
 drop policy if exists "anon insert" on public.receipts;
@@ -45,3 +58,13 @@ create policy "anon read"   on public.receipts for select using (true);
 create policy "anon insert" on public.receipts for insert with check (true);
 create policy "anon update" on public.receipts for update using (true) with check (true);
 create policy "anon delete" on public.receipts for delete using (true);
+
+drop policy if exists "anon read"   on public.invoices;
+drop policy if exists "anon insert" on public.invoices;
+drop policy if exists "anon update" on public.invoices;
+drop policy if exists "anon delete" on public.invoices;
+
+create policy "anon read"   on public.invoices for select using (true);
+create policy "anon insert" on public.invoices for insert with check (true);
+create policy "anon update" on public.invoices for update using (true) with check (true);
+create policy "anon delete" on public.invoices for delete using (true);

@@ -20,6 +20,7 @@ export type ReceiptRow = {
   url: string;                 // user-fillable
   kind: ItemKind;
   owner: string | null;        // Alinka / Anette / Gerald / Glenda / null
+  invoiceId: string | null;    // associated invoice ID
   fileName?: string | null;
   createdAt: number;           // epoch ms, derived from created_at
 };
@@ -45,4 +46,18 @@ export type AnalyzeResult = {
 export type AnalyzeResponse = {
   results: AnalyzeResult[];
   error?: string;
+};
+
+export type InvoiceDb = {
+  id: string;
+  file_name: string;
+  file_data: string;
+  mime_type: string;
+  created_at: string;
+};
+
+export type InvoiceMatch = {
+  receiptId: string;
+  invoiceId: string;
+  confidence: number;
 };
