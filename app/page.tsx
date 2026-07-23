@@ -234,6 +234,7 @@ export default function Page() {
   } | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkOwnerValue, setBulkOwnerValue] = useState('');
+  const [sortByValue, setSortByValue] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const configured = isSupabaseConfigured();
@@ -264,7 +265,7 @@ export default function Page() {
   const visible = useMemo(() => {
     const it = itemFilter.trim().toLowerCase();
     const de = descFilter.trim().toLowerCase();
-    return sorted.filter((r) => {
+    let result = sorted.filter((r) => {
       if (kindFilter.size > 0 && !kindFilter.has(r.kind)) return false;
       if (monthFilter.size > 0) {
         const mk = monthKey(r.date);
@@ -278,14 +279,23 @@ export default function Page() {
       if (de && !r.description.toLowerCase().includes(de)) return false;
       return true;
     });
-  }, [sorted, kindFilter, monthFilter, ownerFilter, itemFilter, descFilter]);
+    if (sortByValue) {
+      result = [...result].sort((a, b) => {
+        const aVal = a.value ?? a.amount ?? 0;
+        const bVal = b.value ?? b.amount ?? 0;
+        return bVal - aVal;
+      });
+    }
+    return result;
+  }, [sorted, kindFilter, monthFilter, ownerFilter, itemFilter, descFilter, sortByValue]);
 
   const filterActive =
     kindFilter.size > 0 ||
     monthFilter.size > 0 ||
     ownerFilter.size > 0 ||
     itemFilter.trim() !== '' ||
-    descFilter.trim() !== '';
+    descFilter.trim() !== '' ||
+    sortByValue;
 
   const monthOptions = useMemo(() => {
     const m = new Map<string, number>();
@@ -763,7 +773,17 @@ export default function Page() {
           <span className="text-gray-500 text-xs">
             Showing {visible.length} of {rows.length}
           </span>
-          {filterActive && (
+          <button
+            onClick={() => setSortByValue(!sortByValue)}
+            className={`text-xs px-2 py-1 rounded font-medium ${
+              sortByValue
+                ? 'bg-blue-600 text-white'
+                : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            {sortByValue ? '↓ High to Low' : 'Sort by Value'}
+          </button>
+          {(filterActive || sortByValue) && (
             <button
               onClick={() => {
                 setKindFilter(new Set());
@@ -771,6 +791,7 @@ export default function Page() {
                 setOwnerFilter(new Set());
                 setItemFilter('');
                 setDescFilter('');
+                setSortByValue(false);
               }}
               className="text-xs text-blue-600 underline"
             >
