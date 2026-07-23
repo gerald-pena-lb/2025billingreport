@@ -10,6 +10,7 @@ create table if not exists public.receipts (
   currency     text,
   item         text not null default '',
   description  text not null default '',
+  notes        text not null default '',
   url          text not null default '',
   file_name    text,
   kind         text not null default 'payment',
@@ -25,6 +26,8 @@ alter table public.receipts
   add column if not exists value numeric(14, 2);
 alter table public.receipts
   add column if not exists owner text;
+alter table public.receipts
+  add column if not exists notes text not null default '';
 
 create index if not exists receipts_date_idx on public.receipts (date nulls last, created_at);
 

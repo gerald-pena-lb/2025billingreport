@@ -80,6 +80,7 @@ function toRow(r: ReceiptDb): ReceiptRow {
     currency: r.currency,
     item: r.item ?? '',
     description: r.description ?? '',
+    notes: r.notes ?? '',
     url: r.url ?? '',
     kind: normKind(r.kind),
     owner: r.owner ?? null,
@@ -387,6 +388,7 @@ export default function Page() {
     if ('currency' in patch) dbPatch.currency = patch.currency ?? null;
     if ('item' in patch) dbPatch.item = patch.item ?? '';
     if ('description' in patch) dbPatch.description = patch.description ?? '';
+    if ('notes' in patch) dbPatch.notes = patch.notes ?? '';
     if ('url' in patch) dbPatch.url = patch.url ?? '';
     if ('kind' in patch) dbPatch.kind = patch.kind ?? 'other';
     if ('owner' in patch) dbPatch.owner = patch.owner ?? null;
@@ -468,6 +470,7 @@ export default function Page() {
         currency: null,
         item: '',
         description: '',
+        notes: '',
         url: '',
         file_name: null,
         kind: 'payment',
@@ -515,6 +518,7 @@ export default function Page() {
               currency: it.currency,
               item: it.item ?? '',
               description: it.description ?? '',
+              notes: '',
               url: '',
               file_name: r.fileName,
               kind: k,
@@ -925,6 +929,10 @@ export default function Page() {
                       className="mt-1 w-full text-[11px] font-normal normal-case border border-gray-300 bg-white rounded px-1 py-0.5"
                     />
                   </th>
+                  <th className="border-b border-gray-300 px-2 py-2 align-top">
+                    <div>Notes</div>
+                    <div className="h-6 mt-1" />
+                  </th>
                   <th className="border-b border-gray-300 px-2 py-2 w-36 align-top">
                     <div>Owner</div>
                     <MultiSelectMenu
@@ -946,14 +954,14 @@ export default function Page() {
               <tbody>
                 {loading && (
                   <tr>
-                    <td colSpan={10} className="text-center text-gray-500 py-16">
+                    <td colSpan={11} className="text-center text-gray-500 py-16">
                       Loading…
                     </td>
                   </tr>
                 )}
                 {!loading && visible.length === 0 && (
                   <tr>
-                    <td colSpan={10} className="text-center text-gray-500 py-16">
+                    <td colSpan={11} className="text-center text-gray-500 py-16">
                       {rows.length === 0
                         ? 'No receipts yet. Click Upload receipts to get started.'
                         : 'No rows match the current filter.'}
@@ -1089,6 +1097,17 @@ export default function Page() {
                         placeholder="Description"
                       />
                     </td>
+                    <td className="border-b border-gray-200 p-0">
+                      <input
+                        type="text"
+                        value={r.notes}
+                        onChange={(e) =>
+                          updateRow(r.id, { notes: e.target.value })
+                        }
+                        className="cell-input"
+                        placeholder="Notes"
+                      />
+                    </td>
                     <td className="border-b border-gray-200 p-1">
                       <select
                         value={r.owner ?? ''}
@@ -1142,7 +1161,7 @@ export default function Page() {
                       Total value{' '}
                       (shown)
                     </td>
-                    <td className="px-2 py-2 font-mono text-right" colSpan={8}>
+                    <td className="px-2 py-2 font-mono text-right" colSpan={9}>
                       {total.map((t) => (
                         <span key={t.ccy} className="mr-4">
                           {formatAmount(t.sum, t.ccy || null)}
@@ -1309,6 +1328,21 @@ export default function Page() {
                     updateRow(r.id, { description: e.target.value })
                   }
                   placeholder="Description"
+                  rows={2}
+                  className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm resize-y"
+                />
+              </label>
+
+              <label className="block mb-2">
+                <span className="block text-[10px] uppercase tracking-wide text-gray-500 mb-0.5">
+                  Notes
+                </span>
+                <textarea
+                  value={r.notes}
+                  onChange={(e) =>
+                    updateRow(r.id, { notes: e.target.value })
+                  }
+                  placeholder="Notes"
                   rows={2}
                   className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm resize-y"
                 />

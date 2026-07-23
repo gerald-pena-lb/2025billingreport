@@ -38,6 +38,7 @@ export type ReceiptDb = {
   currency: string | null;
   item: string;
   description: string;
+  notes: string;
   url: string;
   file_name: string | null;
   kind: string;

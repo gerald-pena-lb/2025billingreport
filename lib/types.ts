@@ -16,6 +16,7 @@ export type ReceiptRow = {
   currency: string | null;
   item: string;
   description: string;
+  notes: string;               // user-fillable notes
   url: string;                 // user-fillable
   kind: ItemKind;
   owner: string | null;        // Alinka / Anette / Gerald / Glenda / null
