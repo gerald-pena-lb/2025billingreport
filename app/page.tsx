@@ -7,6 +7,7 @@ import {
   getSupabase,
   isSupabaseConfigured,
   type ReceiptDb,
+  type ReceiptInsert,
 } from '@/lib/supabase';
 
 const KIND_LABEL: Record<ItemKind, string> = {
@@ -224,6 +225,8 @@ export default function Page() {
     x: number;
     y: number;
   } | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkOwnerValue, setBulkOwnerValue] = useState('');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const configured = isSupabaseConfigured();
@@ -382,6 +385,29 @@ export default function Page() {
     void persistUpdate(id, patch);
   }
 
+  async function bulkUpdateOwner(ownerValue: string) {
+    if (selected.size === 0) return;
+    const newOwner = ownerValue || null;
+    const selectedIds = Array.from(selected);
+    setRows((prev) =>
+      prev.map((r) =>
+        selectedIds.includes(r.id) ? { ...r, owner: newOwner } : r,
+      ),
+    );
+    const supabase = getSupabase();
+    if (!supabase) return;
+    const { error } = await supabase
+      .from('receipts')
+      .update({ owner: newOwner })
+      .in('id', selectedIds);
+    if (error) {
+      setDbError(error.message);
+    } else {
+      setSelected(new Set());
+      setBulkOwnerValue('');
+    }
+  }
+
   async function deleteRow(id: string) {
     setRows((prev) => prev.filter((r) => r.id !== id));
     const supabase = getSupabase();
@@ -456,7 +482,7 @@ export default function Page() {
         setUploadMsg('Supabase is not configured — cannot save rows.');
         return;
       }
-      const toInsert: Omit<ReceiptDb, 'id' | 'created_at'>[] = [];
+      const toInsert: ReceiptInsert[] = [];
       const errors: string[] = [];
       const perFile: string[] = [];
       for (const r of json.results) {
@@ -746,6 +772,41 @@ export default function Page() {
           )}
         </div>
 
+        {selected.size > 0 && (
+          <div className="mb-3 p-3 bg-blue-50 border border-blue-200 rounded-md flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+            <span className="text-sm font-medium text-blue-900">
+              {selected.size} row{selected.size !== 1 ? 's' : ''} selected
+            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={bulkOwnerValue}
+                onChange={(e) => setBulkOwnerValue(e.target.value)}
+                className="text-sm px-2 py-1 rounded border border-blue-300 bg-white outline-none"
+              >
+                <option value="">— Select owner —</option>
+                {OWNERS.map((o) => (
+                  <option key={o} value={o}>
+                    {o}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={() => bulkUpdateOwner(bulkOwnerValue)}
+                disabled={!bulkOwnerValue}
+                className="text-sm bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white px-3 py-1 rounded font-medium"
+              >
+                Apply
+              </button>
+              <button
+                onClick={() => setSelected(new Set())}
+                className="text-sm text-blue-600 hover:underline"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+        )}
+
         {uploadMsg && (
           <div className="mb-3 text-sm bg-blue-50 border border-blue-200 text-blue-900 rounded px-3 py-2 whitespace-pre-wrap">
             {uploadMsg}
@@ -774,6 +835,20 @@ export default function Page() {
             <table className="w-full text-sm border-collapse">
               <thead className="bg-gray-100 text-left text-xs uppercase tracking-wide text-gray-600 sticky top-0 z-10">
                 <tr>
+                  <th className="border-b border-gray-300 px-2 py-2 w-10 align-top text-center">
+                    <input
+                      type="checkbox"
+                      checked={visible.length > 0 && selected.size === visible.length}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelected(new Set(visible.map((r) => r.id)));
+                        } else {
+                          setSelected(new Set());
+                        }
+                      }}
+                      title="Select all visible rows"
+                    />
+                  </th>
                   <th className="border-b border-gray-300 px-2 py-2 w-36 align-top">
                     <div>Date of payment</div>
                     <MultiSelectMenu
@@ -843,14 +918,14 @@ export default function Page() {
               <tbody>
                 {loading && (
                   <tr>
-                    <td colSpan={9} className="text-center text-gray-500 py-16">
+                    <td colSpan={10} className="text-center text-gray-500 py-16">
                       Loading…
                     </td>
                   </tr>
                 )}
                 {!loading && visible.length === 0 && (
                   <tr>
-                    <td colSpan={9} className="text-center text-gray-500 py-16">
+                    <td colSpan={10} className="text-center text-gray-500 py-16">
                       {rows.length === 0
                         ? 'No receipts yet. Click Upload receipts to get started.'
                         : 'No rows match the current filter.'}
@@ -864,6 +939,21 @@ export default function Page() {
                       r.kind !== 'payment' ? 'text-gray-500' : ''
                     }`}
                   >
+                    <td className="border-b border-gray-200 p-2 text-center">
+                      <input
+                        type="checkbox"
+                        checked={selected.has(r.id)}
+                        onChange={(e) => {
+                          const next = new Set(selected);
+                          if (e.target.checked) {
+                            next.add(r.id);
+                          } else {
+                            next.delete(r.id);
+                          }
+                          setSelected(next);
+                        }}
+                      />
+                    </td>
                     <td className="border-b border-gray-200 p-0">
                       <input
                         type="date"
@@ -1015,6 +1105,7 @@ export default function Page() {
               {total.length > 0 && (
                 <tfoot className="bg-gray-50">
                   <tr>
+                    <td className="px-2 py-2 text-center"></td>
                     <td className="px-2 py-2 text-right text-xs uppercase tracking-wide text-gray-500 font-medium">
                       Total value{' '}
                       (shown)
@@ -1055,19 +1146,34 @@ export default function Page() {
               }`}
             >
               <div className="flex items-start justify-between gap-2 mb-2">
-                <select
-                  value={r.kind}
-                  onChange={(e) =>
-                    updateRow(r.id, { kind: e.target.value as ItemKind })
-                  }
-                  className={`text-xs px-2 py-1 rounded border ${KIND_STYLE[r.kind]} outline-none`}
-                >
-                  {ALL_KINDS.map((k) => (
-                    <option key={k} value={k}>
-                      {KIND_LABEL[k]}
-                    </option>
-                  ))}
-                </select>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={selected.has(r.id)}
+                    onChange={(e) => {
+                      const next = new Set(selected);
+                      if (e.target.checked) {
+                        next.add(r.id);
+                      } else {
+                        next.delete(r.id);
+                      }
+                      setSelected(next);
+                    }}
+                  />
+                  <select
+                    value={r.kind}
+                    onChange={(e) =>
+                      updateRow(r.id, { kind: e.target.value as ItemKind })
+                    }
+                    className={`text-xs px-2 py-1 rounded border ${KIND_STYLE[r.kind]} outline-none`}
+                  >
+                    {ALL_KINDS.map((k) => (
+                      <option key={k} value={k}>
+                        {KIND_LABEL[k]}
+                      </option>
+                    ))}
+                  </select>
+                </div>
                 <button
                   onClick={() => deleteRow(r.id)}
                   className="text-gray-400 hover:text-red-600 text-xl leading-none px-2 -mt-1"

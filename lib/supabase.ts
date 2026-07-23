@@ -45,3 +45,7 @@ export type ReceiptDb = {
   owner: string | null;
   created_at: string;
 };
+
+export type ReceiptInsert = Omit<ReceiptDb, 'id' | 'created_at' | 'owner'> & {
+  owner?: string | null;
+};
