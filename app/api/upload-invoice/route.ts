@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, PDFPage } from 'pdf-lib';
 import { createClient } from '@supabase/supabase-js';
+import * as XLSX from 'xlsx';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -31,62 +32,172 @@ Return ONLY a JSON object:
   ]
 }`;
 
-async function fileToChunks(file: File): Promise<Array<{ bytes: string; mediaType: string; label: string }>> {
+async function fileToChunks(
+  file: File,
+): Promise<
+  Array<{
+    type: 'image' | 'document' | 'text';
+    bytes?: string;
+    mediaType?: string;
+    text?: string;
+    label: string;
+  }>
+> {
   const bytes = await file.arrayBuffer();
   const uint8Array = new Uint8Array(bytes);
 
-  const mediaType = file.type.startsWith('image/') ? file.type : 'image/jpeg';
+  if (file.type === 'application/pdf') {
+    return [
+      {
+        type: 'document',
+        bytes: Buffer.from(uint8Array).toString('base64'),
+        mediaType: 'application/pdf',
+        label: file.name,
+      },
+    ];
+  }
+
+  if (file.type === 'text/csv' || file.name.endsWith('.csv')) {
+    const text = new TextDecoder().decode(uint8Array);
+    return [
+      {
+        type: 'text',
+        text: `CSV Invoice Data:\n${text}`,
+        label: file.name,
+      },
+    ];
+  }
+
+  if (
+    file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+    file.type === 'application/vnd.ms-excel' ||
+    file.name.endsWith('.xlsx') ||
+    file.name.endsWith('.xls')
+  ) {
+    try {
+      const workbook = XLSX.read(uint8Array, { type: 'array' });
+      let csvText = '';
+      for (const sheetName of workbook.SheetNames) {
+        const sheet = workbook.Sheets[sheetName];
+        csvText += `Sheet: ${sheetName}\n`;
+        csvText += XLSX.utils.sheet_to_csv(sheet) + '\n\n';
+      }
+      return [
+        {
+          type: 'text',
+          text: `Excel Invoice Data:\n${csvText}`,
+          label: file.name,
+        },
+      ];
+    } catch {
+      return [
+        {
+          type: 'text',
+          text: 'Failed to parse Excel file',
+          label: file.name,
+        },
+      ];
+    }
+  }
+
+  if (file.type.startsWith('image/')) {
+    return [
+      {
+        type: 'image',
+        bytes: Buffer.from(uint8Array).toString('base64'),
+        mediaType: file.type as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
+        label: file.name,
+      },
+    ];
+  }
 
   return [
     {
-      bytes: Buffer.from(uint8Array).toString('base64'),
-      mediaType: mediaType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
+      type: 'text',
+      text: 'Unsupported file format',
       label: file.name,
     },
   ];
 }
 
 async function extractInvoiceItems(
-  chunks: Array<{ bytes: string; mediaType: string; label: string }>,
+  chunks: Array<{
+    type: 'image' | 'document' | 'text';
+    bytes?: string;
+    mediaType?: string;
+    text?: string;
+    label: string;
+  }>,
 ): Promise<InvoiceLineItem[]> {
   const items: InvoiceLineItem[] = [];
 
   for (const chunk of chunks) {
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-5',
-      max_tokens: 4000,
-      system: INVOICE_SYSTEM_PROMPT,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'image',
-              source: {
-                type: 'base64',
-                media_type: chunk.mediaType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
-                data: chunk.bytes,
-              },
-            },
-            {
-              type: 'text',
-              text: `Extract all line items from this invoice image (${chunk.label}). Return JSON only.`,
-            },
-          ],
+    const messageContent: Array<{
+      type: 'text' | 'image' | 'document';
+      text?: string;
+      source?: {
+        type: 'base64';
+        media_type?: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' | 'application/pdf';
+        data?: string;
+      };
+    }> = [];
+
+    if (chunk.type === 'image' && chunk.bytes) {
+      messageContent.push({
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: chunk.mediaType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
+          data: chunk.bytes,
         },
-      ],
+      });
+    } else if (chunk.type === 'document' && chunk.bytes) {
+      messageContent.push({
+        type: 'document',
+        source: {
+          type: 'base64',
+          media_type: 'application/pdf',
+          data: chunk.bytes,
+        },
+      } as any);
+    } else if (chunk.type === 'text' && chunk.text) {
+      messageContent.push({
+        type: 'text',
+        text: chunk.text,
+      });
+    }
+
+    messageContent.push({
+      type: 'text',
+      text: `Extract all line items from this invoice (${chunk.label}). Return JSON in this format: {"items": [{"date": "YYYY-MM-DD" or null, "amount": number, "currency": "USD" etc, "description": string}]}. Return ONLY valid JSON.`,
     });
 
-    const content = response.content[0];
-    if (content.type === 'text') {
-      try {
-        const parsed = JSON.parse(content.text);
-        if (parsed.items && Array.isArray(parsed.items)) {
-          items.push(...parsed.items);
+    try {
+      const response = await anthropic.messages.create({
+        model: 'claude-sonnet-5',
+        max_tokens: 4000,
+        system: INVOICE_SYSTEM_PROMPT,
+        messages: [
+          {
+            role: 'user',
+            content: messageContent as any,
+          },
+        ],
+      });
+
+      const content = response.content[0];
+      if (content.type === 'text') {
+        try {
+          const parsed = JSON.parse(content.text);
+          if (parsed.items && Array.isArray(parsed.items)) {
+            items.push(...parsed.items);
+          }
+        } catch {
+          console.error('Failed to parse invoice extraction:', content.text);
         }
-      } catch {
-        console.error('Failed to parse invoice extraction');
       }
+    } catch (error) {
+      console.error('Claude API error:', error);
     }
   }
 

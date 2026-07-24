@@ -825,7 +825,7 @@ export default function Page() {
               ref={invoiceInputRef}
               type="file"
               multiple
-              accept="image/*"
+              accept="image/*,application/pdf,.csv,.xlsx,.xls"
               className="hidden"
               onChange={(e) => handleInvoiceFiles(e.target.files)}
             />
